@@ -44,11 +44,11 @@ For an implementation of the fast cross-validation algorithms combined with Impr
 >
 > X = np.random.uniform(size=(N, K)) # Random X data
 > Y = np.random.uniform(size=(N, M)) # Random Y data
-> cv_splits = np.arange(100) % 5 # 5-fold cross-validation
+> folds = np.arange(100) % 5 # 5-fold cross-validation
 >
 > # Instantiate CVMatrix
 > cvm = CVMatrix(
->     cv_splits=cv_splits,
+>     folds=folds,
 >     center_X=True,
 >     center_Y=True,
 >     scale_X=True,
@@ -57,13 +57,13 @@ For an implementation of the fast cross-validation algorithms combined with Impr
 > # Fit on X and Y
 > cvm.fit(X=X, Y=Y)
 > # Compute training set XTX and/or XTY for each fold
-> for val_split in cvm.val_folds_dict.keys():
+> for fold in cvm.folds_dict.keys():
 >     # Get both XTX and XTY
->     training_XTX, training_XTY = cvm.training_XTX_XTY(val_split)
+>     training_XTX, training_XTY = cvm.training_XTX_XTY(fold)
 >     # Get only XTX
->     training_XTX = cvm.training_XTX(val_split)
+>     training_XTX = cvm.training_XTX(fold)
 >     # Get only XTY
->     training_XTY = cvm.training_XTY(val_split)
+>     training_XTY = cvm.training_XTY(fold)
 
 ### Examples
 In [examples](https://github.com/Sm00thix/CVMatrix/tree/main/examples), you will find:

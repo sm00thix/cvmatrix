@@ -89,7 +89,7 @@ class TestClass:
             self,
             X: npt.ArrayLike,
             Y: Union[None, npt.ArrayLike],
-            cv_splits: Iterable[Hashable],
+            folds: Iterable[Hashable],
             center_X: bool,
             center_Y: bool,
             scale_X: bool,
@@ -108,9 +108,9 @@ class TestClass:
         Y : Union[None, npt.ArrayLike]
             The response variables.
 
-        cv_splits : Iterable of Hashable with N elements
+        folds : Iterable of Hashable with N elements
             An iterable defining cross-validation splits. Each unique value in
-            `cv_splits` corresponds to a different fold.
+            `folds` corresponds to a different fold.
 
         center_X : bool
             Whether to center `X`.
@@ -140,10 +140,10 @@ class TestClass:
             A tuple containing the NaiveCVMatrix and CVMatrix models.
         """
         naive = self.fit_naive(
-            X, Y, cv_splits, center_X, center_Y, scale_X, scale_Y, dtype, copy
+            X, Y, folds, center_X, center_Y, scale_X, scale_Y, dtype, copy
         )
         fast = self.fit_fast(
-            X, Y, cv_splits, center_X, center_Y, scale_X, scale_Y, dtype, copy
+            X, Y, folds, center_X, center_Y, scale_X, scale_Y, dtype, copy
         )
         return naive, fast
 
@@ -151,7 +151,7 @@ class TestClass:
             self,
             X: npt.ArrayLike,
             Y: Union[None, npt.ArrayLike],
-            cv_splits: Iterable[Hashable],
+            folds: Iterable[Hashable],
             center_X: bool,
             center_Y: bool,
             scale_X: bool,
@@ -170,9 +170,9 @@ class TestClass:
         Y : Union[None, npt.ArrayLike]
             The response variables.
         
-        cv_splits : Iterable of Hashable with N elements
+        folds : Iterable of Hashable with N elements
             An iterable defining cross-validation splits. Each unique value in
-            `cv_splits` corresponds to a different fold.
+            `folds` corresponds to a different fold.
 
         center_X : bool
             Whether to center `X`.
@@ -196,7 +196,7 @@ class TestClass:
             made. If `True` a copy is always made. If no copy is made, then external
             modifications to `X` or `Y` will result in undefined behavior.
         """
-        fast = CVMatrix(cv_splits, center_X, center_Y, scale_X, scale_Y, dtype, copy)
+        fast = CVMatrix(folds, center_X, center_Y, scale_X, scale_Y, dtype, copy)
         fast.fit(X, Y)
         return fast
 
@@ -204,7 +204,7 @@ class TestClass:
             self,
             X: npt.ArrayLike,
             Y: Union[None, npt.ArrayLike],
-            cv_splits: Iterable[Hashable],
+            folds: Iterable[Hashable],
             center_X: bool,
             center_Y: bool,
             scale_X: bool,
@@ -223,9 +223,9 @@ class TestClass:
         Y : Union[None, npt.ArrayLike]
             The response variables.
         
-        cv_splits : Iterable of Hashable with N elements
+        folds : Iterable of Hashable with N elements
             An iterable defining cross-validation splits. Each unique value in
-            `cv_splits` corresponds to a different fold.
+            `folds` corresponds to a different fold.
 
         center_X : bool
             Whether to center `X`.
@@ -250,7 +250,7 @@ class TestClass:
             modifications to `X` or `Y` will result in undefined behavior.
         """
         naive = NaiveCVMatrix(
-            cv_splits, center_X, center_Y, scale_X, scale_Y, dtype, copy
+            folds, center_X, center_Y, scale_X, scale_Y, dtype, copy
         )
         naive.fit(X, Y)
         return naive
@@ -259,7 +259,7 @@ class TestClass:
             self,
             naive: NaiveCVMatrix,
             fast: CVMatrix,
-            cv_splits: Iterable[Hashable],
+            folds: Iterable[Hashable],
         ) -> None:
         """
         Checks if the matrices computed by the NaiveCVMatrix and CVMatrix models are
@@ -273,9 +273,9 @@ class TestClass:
         fast : CVMatrix
             The CVMatrix model.
         
-        cv_splits : Iterable of Hashable with N elements
+        folds : Iterable of Hashable with N elements
             An iterable defining cross-validation splits. Each unique value in
-            `cv_splits` corresponds to a different fold.
+            `folds` corresponds to a different fold.
         """
         error_msg = (
             f"fast center_X: {fast.center_X}, center_Y: {fast.center_Y}, "
@@ -283,23 +283,23 @@ class TestClass:
             f"\nnaive center_X: {naive.center_X}, center_Y: {naive.center_Y}, "
             f"scale_X: {naive.scale_X}, scale_Y: {naive.scale_Y}"
         )
-        for val_fold in cv_splits:
-            error_msg = f"val_fold: {val_fold}\n{error_msg}"
+        for fold in folds:
+            error_msg = f"Fold: {fold}\n{error_msg}"
             if naive.Y_total is not None:
                 # Check if the matrices are equivalent for the training_XTX_XTY method
                 # between the NaiveCVMatrix and CVMatrix models.
-                naive_XTX, naive_XTY = naive.training_XTX_XTY(val_fold)
-                fast_XTX, fast_XTY = fast.training_XTX_XTY(val_fold)
+                naive_XTX, naive_XTY = naive.training_XTX_XTY(fold)
+                fast_XTX, fast_XTY = fast.training_XTX_XTY(fold)
                 assert_allclose(fast_XTX, naive_XTX, err_msg=error_msg)
                 assert_allclose(fast_XTY, naive_XTY, err_msg=error_msg)
                 # Check if the matrices are equivalent for the training_XTX and
                 # training_XTY methods between the NaiveCVMatrix and CVMatrix models.
                 # Also check if the matrices are equivalent for the training_XTX,
                 # training_XTY, and training_XTX_XTY methods.
-                direct_naive_XTX = naive.training_XTX(val_fold)
-                direct_fast_XTX = fast.training_XTX(val_fold)
-                direct_naive_XTY = naive.training_XTY(val_fold)
-                direct_fast_XTY = fast.training_XTY(val_fold)
+                direct_naive_XTX = naive.training_XTX(fold)
+                direct_fast_XTX = fast.training_XTX(fold)
+                direct_naive_XTY = naive.training_XTY(fold)
+                direct_fast_XTY = fast.training_XTY(fold)
                 assert_allclose(direct_fast_XTX, direct_naive_XTX, err_msg=error_msg)
                 assert_allclose(direct_fast_XTY, direct_naive_XTY, err_msg=error_msg)
                 assert_allclose(direct_fast_XTX, fast_XTX, err_msg=error_msg)
@@ -307,8 +307,8 @@ class TestClass:
             else:
                 # Check if the matrices are equivalent for the training_XTX method
                 # between the NaiveCVMatrix and CVMatrix models.
-                naive_XTX = naive.training_XTX(val_fold)
-                fast_XTX = fast.training_XTX(val_fold)
+                naive_XTX = naive.training_XTX(fold)
+                fast_XTX = fast.training_XTX(fold)
                 assert_allclose(fast_XTX, naive_XTX, err_msg=error_msg)
 
     def test_all_preprocessing_combinations(self):
@@ -318,15 +318,15 @@ class TestClass:
         """
         X = self.load_X()[:, :5] # Use only the first 5 variables for faster testing.
         Y = self.load_Y(["Protein", "Moisture"])
-        cv_splits = self.load_Y(["split"]).squeeze()
+        folds = self.load_Y(["split"]).squeeze()
 
         # Use only 1,000 samples for each fold for faster testing.
-        indices = self.subset_indices(cv_splits)
+        indices = self.subset_indices(folds)
         X = X[indices]
         Y = Y[indices]
-        cv_splits = cv_splits[indices]
-        assert X.shape[0] == Y.shape[0] == cv_splits.shape[0] == 3000
-        assert len(np.unique(cv_splits)) == 3
+        folds = folds[indices]
+        assert X.shape[0] == Y.shape[0] == folds.shape[0] == 3000
+        assert len(np.unique(folds)) == 3
         center_Xs = [True, False]
         center_Ys = [True, False]
         scale_Xs = [True, False]
@@ -334,9 +334,9 @@ class TestClass:
         for center_X, center_Y, scale_X, scale_Y in product(
                 center_Xs, center_Ys, scale_Xs, scale_Ys):
             naive, fast = self.fit_models(
-                X, Y, cv_splits, center_X, center_Y, scale_X, scale_Y, np.float64
+                X, Y, folds, center_X, center_Y, scale_X, scale_Y, np.float64
             )
-            self.check_equivalent_matrices(naive, fast, cv_splits)
+            self.check_equivalent_matrices(naive, fast, folds)
 
     def test_constant_columns(self):
         """
@@ -345,7 +345,7 @@ class TestClass:
         """
         X = self.load_X()[:, :5]
         Y = self.load_Y(["Protein", "Moisture"])
-        cv_splits = self.load_Y(["split"]).squeeze()
+        folds = self.load_Y(["split"]).squeeze()
         center_X = False
         center_Y = False
         scale_X = True
@@ -361,9 +361,9 @@ class TestClass:
                 X[:, 0] = 1.0
                 Y[:, 0] = 1.0
             naive, fast = self.fit_models(
-                X, Y, cv_splits, center_X, center_Y, scale_X, scale_Y, np.float64
+                X, Y, folds, center_X, center_Y, scale_X, scale_Y, np.float64
             )
-            self.check_equivalent_matrices(naive, fast, cv_splits)
+            self.check_equivalent_matrices(naive, fast, folds)
 
     def test_no_second_dimension_provided(self):
         """
@@ -373,19 +373,19 @@ class TestClass:
         """
         X = np.array([1, 2, 3, 4, 5])
         Y = np.array([5, 4, 3, 2, 1])
-        cv_splits = np.array([0, 0, 1, 1, 2])
+        folds = np.array([0, 0, 1, 1, 2])
         center_X = True
         center_Y = True
         scale_X = True
         scale_Y = True
         naive, fast = self.fit_models(
-            X, Y, cv_splits, center_X, center_Y, scale_X, scale_Y, np.float64
+            X, Y, folds, center_X, center_Y, scale_X, scale_Y, np.float64
         )
-        self.check_equivalent_matrices(naive, fast, cv_splits)
+        self.check_equivalent_matrices(naive, fast, folds)
         XTXs, XTYs = zip(*
                          [
                              naive.training_XTX_XTY(val_split)
-                             for val_split in np.unique(cv_splits)
+                             for val_split in np.unique(folds)
                         ]
         )
         X = np.expand_dims(X, axis=1)
@@ -394,7 +394,7 @@ class TestClass:
         expanded_XTXs, expanded_XTYs = zip(*
                                             [
                                                 fast.training_XTX_XTY(val_split)
-                                                for val_split in np.unique(cv_splits)
+                                                for val_split in np.unique(folds)
                                             ]
         )
         assert_allclose(XTXs, expanded_XTXs)
@@ -407,15 +407,15 @@ class TestClass:
         """
         X = self.load_X()[:, :5]
         Y = None
-        cv_splits = self.load_Y(["split"]).squeeze()
+        folds = self.load_Y(["split"]).squeeze()
         center_X = True
         center_Y = True
         scale_X = True
         scale_Y = True
         naive, fast = self.fit_models(
-            X, Y, cv_splits, center_X, center_Y, scale_X, scale_Y, np.float64
+            X, Y, folds, center_X, center_Y, scale_X, scale_Y, np.float64
         )
-        self.check_equivalent_matrices(naive, fast, cv_splits)
+        self.check_equivalent_matrices(naive, fast, folds)
 
     def test_dtype(self):
         """
@@ -424,7 +424,7 @@ class TestClass:
         """
         X = np.array([1, 2, 3, 4, 5])
         Y = np.array([5, 4, 3, 2, 1])
-        cv_splits = np.array([0, 0, 1, 1, 2])
+        folds = np.array([0, 0, 1, 1, 2])
         center_Xs = [True, False]
         center_Ys = [True, False]
         scale_Xs = [True, False]
@@ -436,18 +436,18 @@ class TestClass:
         for center_X, center_Y, scale_X, scale_Y, dtype in product(
                 center_Xs, center_Ys, scale_Xs, scale_Ys, dtypes):
             naive, fast = self.fit_models(
-                X, Y, cv_splits, center_X, center_Y, scale_X, scale_Y, dtype
+                X, Y, folds, center_X, center_Y, scale_X, scale_Y, dtype
             )
             naive_XTXs, naive_XTYs = zip(*
                                             [
                                                 naive.training_XTX_XTY(val_split)
-                                                for val_split in np.unique(cv_splits)
+                                                for val_split in np.unique(folds)
                                             ]
             )
             fast_XTXs, fast_XTYs = zip(*
                                        [
                                            fast.training_XTX_XTY(val_split)
-                                           for val_split in np.unique(cv_splits)
+                                           for val_split in np.unique(folds)
                                        ]
             )
             for naive_XTX, fast_XTX in zip(naive_XTXs, fast_XTXs):
@@ -464,16 +464,16 @@ class TestClass:
         dtype = np.float64
         X = np.array([1, 2, 3, 4, 5]).astype(dtype)
         Y = np.array([5, 4, 3, 2, 1]).astype(dtype)
-        cv_splits = np.array([0, 0, 1, 1, 2])
+        folds = np.array([0, 0, 1, 1, 2])
         center_X = False
         center_Y = False
         scale_X = False
         scale_Y = False
         for copy in [True, False]:
             naive, fast = self.fit_models(
-                X, Y, cv_splits, center_X, center_Y, scale_X, scale_Y, dtype, copy
+                X, Y, folds, center_X, center_Y, scale_X, scale_Y, dtype, copy
             )
-            self.check_equivalent_matrices(naive, fast, cv_splits)
+            self.check_equivalent_matrices(naive, fast, folds)
             if copy:
                 assert not np.shares_memory(naive.X_total, X)
                 assert not np.shares_memory(naive.Y_total, Y)
@@ -492,20 +492,20 @@ class TestClass:
         """
         X = np.array([1, 2, 3, 4, 5])
         Y = np.array([5, 4, 3, 2, 1])
-        cv_splits = np.array([0, 0, 1, 1, 2])
+        folds = np.array([0, 0, 1, 1, 2])
         center_X = True
         center_Y = True
         scale_X = True
         scale_Y = True
         naive, fast = self.fit_models(
-            X, Y, cv_splits, center_X, center_Y, scale_X, scale_Y
+            X, Y, folds, center_X, center_Y, scale_X, scale_Y
         )
-        self.check_equivalent_matrices(naive, fast, cv_splits)
+        self.check_equivalent_matrices(naive, fast, folds)
         new_naive = self.fit_naive(
-            Y, X, cv_splits, center_X, center_Y, scale_X, scale_Y
+            Y, X, folds, center_X, center_Y, scale_X, scale_Y
         )
         fast.fit(Y, X)
-        self.check_equivalent_matrices(new_naive, fast, cv_splits)
+        self.check_equivalent_matrices(new_naive, fast, folds)
 
     def test_errors(self):
         """
@@ -513,13 +513,13 @@ class TestClass:
         """
         X = np.array([1, 2, 3, 4, 5])
         Y = None
-        cv_splits = np.array([0, 0, 1, 1, 2])
+        folds = np.array([0, 0, 1, 1, 2])
         center_X = True
         center_Y = True
         scale_X = True
         scale_Y = True
         naive, fast = self.fit_models(
-            X, Y, cv_splits, center_X, center_Y, scale_X, scale_Y
+            X, Y, folds, center_X, center_Y, scale_X, scale_Y
         )
 
         error_msg = "Response variables `Y` are not provided."
@@ -537,9 +537,9 @@ class TestClass:
         with pytest.raises(ValueError, match=error_msg):
             fast._training_matrices(False, False, 0)
         invalid_split = 3
-        error_msg = f"Validation fold {invalid_split} not found."
+        error_msg = f"Fold {invalid_split} not found."
         naive, fast = self.fit_models(
-            X, X, cv_splits, center_X, center_Y, scale_X, scale_Y
+            X, X, folds, center_X, center_Y, scale_X, scale_Y
         )
         with pytest.raises(ValueError, match=error_msg):
             fast.training_XTX_XTY(invalid_split)

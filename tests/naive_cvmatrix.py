@@ -27,9 +27,9 @@ class NaiveCVMatrix(CVMatrix):
 
     Parameters
     ----------
-    cv_splits : Iterable of Hashable with N elements
+    folds : Iterable of Hashable with N elements
         An iterable defining cross-validation splits. Each unique value in
-        `cv_splits` corresponds to a different fold.
+        `folds` corresponds to a different fold.
 
     center_X : bool, optional, default=True
         Whether to center `X` before computation of
@@ -75,7 +75,7 @@ class NaiveCVMatrix(CVMatrix):
 
     def __init__(
             self,
-            cv_splits: Iterable[Hashable],
+            folds: Iterable[Hashable],
             center_X: bool = True,
             center_Y: bool = True,
             scale_X: bool = True,
@@ -84,7 +84,7 @@ class NaiveCVMatrix(CVMatrix):
             copy: bool = True,
         ) -> None:
         super().__init__(
-            cv_splits=cv_splits,
+            folds=folds,
             center_X=center_X,
             center_Y=center_Y,
             scale_X=scale_X,
@@ -120,7 +120,7 @@ class NaiveCVMatrix(CVMatrix):
             self,
             return_XTX: bool,
             return_XTY: bool,
-            val_fold: Hashable
+            fold: Hashable
         ) -> Union[np.ndarray, tuple[np.ndarray, np.ndarray]]:
         if not return_XTX and not return_XTY:
             raise ValueError(
@@ -130,8 +130,8 @@ class NaiveCVMatrix(CVMatrix):
             raise ValueError("Response variables `Y` are not provided.")
         training_indices = np.concatenate(
             [
-                self.val_folds_dict.get(i)
-                for i in self.val_folds_dict if i != val_fold
+                self.folds_dict.get(i)
+                for i in self.folds_dict if i != fold
             ]
         )
         X_train = self.X_total[training_indices]

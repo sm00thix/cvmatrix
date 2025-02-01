@@ -40,13 +40,13 @@ if __name__ == '__main__':
     # the first samples is in the first fold (fold 0), the second sample is in the
     # second fold (fold "one"), the third and fourth samples are in the third fold
     # (fold 2).
-    cv_splits = [0, "one", 2, 2]
+    folds = [0, "one", 2, 2]
 
     # Create a CVMatrix object with centering and scaling of X and Y. We could have
     # used any of the 16 combinations of centering and scaling. The default is to
     # center and scale both X and Y.
     cvm = CVMatrix(
-        cv_splits=cv_splits, center_X=True, center_Y=True, scale_X=True, scale_Y=True
+        folds=folds, center_X=True, center_Y=True, scale_X=True, scale_Y=True
     )
 
     # Fit the model to the data. This will compute total XTX and XTY matrices.
@@ -55,19 +55,19 @@ if __name__ == '__main__':
     # the chosen centering and scaling are computed.
     cvm.fit(X, Y)
 
-    # The unique validation folds and associated indices are stored in the
-    # val_folds_dict
-    print(f"Validation folds: {cvm.val_folds_dict.keys()}")
-    for fold, samples in cvm.val_folds_dict.items():
+    # The unique folds and associated indices are stored in the
+    # folds_dict
+    print(f"Folds: {cvm.folds_dict.keys()}")
+    for fold, samples in cvm.folds_dict.items():
         print(f"Fold {fold} samples: {samples}")
     print()
 
     # Compute the training set matrices for each fold.
     print("Training set matrices using training_XTX_XTY:")
-    for fold in cvm.val_folds_dict.keys():
-        # Notice that fold is the validation fold for which we are computing the
-        # training set matrices. The training set matrices are computed using all
-        # samples that are not in the validation fold.
+    for fold in cvm.folds_dict.keys():
+        # Notice that the samples associated with fold are considered part of the
+        # validation set. The training set is then all samples not associated with this
+        # fold.
         XTX, XTY = cvm.training_XTX_XTY(fold)
         print(f"Fold {fold}:")
         print(f"Training XTX:\n{XTX}")
@@ -77,12 +77,12 @@ if __name__ == '__main__':
     # We can also get only XTX or only XTY. However, if both XTX and XTY are needed,
     # it is more efficient to call training_XTX_XTY.
     print("Training set matrices using training_XTX and training_XTY:")
-    for fold in cvm.val_folds_dict.keys():
+    for fold in cvm.folds_dict.keys():
         XTX = cvm.training_XTX(fold)
         print(f"Fold {fold}:")
         print(f"Training XTX:\n{XTX}")
         print()
-    for fold in cvm.val_folds_dict.keys():
+    for fold in cvm.folds_dict.keys():
         XTY = cvm.training_XTY(fold)
         print(f"Fold {fold}:")
         print(f"Training XTY:\n{XTY}")
@@ -111,7 +111,7 @@ if __name__ == '__main__':
 
     print("Fitting on new data:")
     cvm.fit(X, Y)
-    for fold in cvm.val_folds_dict.keys():
+    for fold in cvm.folds_dict.keys():
         XTX, XTY = cvm.training_XTX_XTY(fold)
         print(f"Fold {fold}:")
         print(f"Training XTX:\n{XTX}")
