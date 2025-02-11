@@ -28,7 +28,7 @@ jobs:
             id-token: write
         environment:
             name: pypi
-            url: https://pypi.org/p/ikpls
+            url: https://pypi.org/p/cvmatrix
 
     github_release:
         needs: publish_package
