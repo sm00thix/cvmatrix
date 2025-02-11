@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "cvmatrix"
-version = "1.0.2.post2"
+version = "1.1.0"
 description = "Fast computation of possibly centered/scaled training set kernel matrices in a cross-validation setting."
 authors = ["Sm00thix <oleemail@icloud.com>"]
 maintainers = ["Sm00thix <oleemail@icloud.com>"]
@@ -10,7 +10,7 @@ homepage = "https://cvmatrix.readthedocs.io/en/latest/"
 repository = "https://github.com/Sm00thix/CVMatrix"
 
 [tool.poetry.dependencies]
-python = ">=3.9, <3.13"
+python = ">=3.9, <3.14"
 numpy = "^2.0.0"
 
 [build-system]
