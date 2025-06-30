@@ -12,26 +12,13 @@ import numpy as np
 
 from cvmatrix.cvmatrix import CVMatrix
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Create some example data. X must have shape (N, K) or (N,) and Y must have shape
     # (N, M) or (N,). It follows that the number of samples in X and Y must be equal.
-    # Y can be None if only XTX is needed.
-    X = np.array(
-        [
-            [1, 2, 3],
-            [4, 5, 6],
-            [7, 8, 9],
-            [10, 11, 12]
-        ]
-    )
-    Y = np.array(
-        [
-            [1, 2],
-            [3, 4],
-            [5, 6],
-            [7, 8]
-        ]
-    )
+    # Y can be None if only XTWX is needed.
+    X = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]])
+    Y = np.array([[1, 2], [3, 4], [5, 6], [7, 8]])
+    weights = np.array([4.2, 13.37, 3.14, 0])
 
     # The cross-validation folds must be of type Hashable (e.g., int, str, etc.)
     # They must be passed in an iterable of length equal to the number of samples in X
@@ -49,11 +36,11 @@ if __name__ == '__main__':
         folds=folds, center_X=True, center_Y=True, scale_X=True, scale_Y=True
     )
 
-    # Fit the model to the data. This will compute total XTX and XTY matrices.
+    # Fit the model to the data. This will compute total XTWX and XTWY matrices.
     # It also computes global statistics that will be reused when determining the
     # centering and scaling of the training set. Only statistics that are relevant for
     # the chosen centering and scaling are computed.
-    cvm.fit(X, Y)
+    cvm.fit(X, Y, weights)
 
     # The unique folds and associated indices are stored in the
     # folds_dict
@@ -70,50 +57,36 @@ if __name__ == '__main__':
         # fold.
         XTX, XTY = cvm.training_XTX_XTY(fold)
         print(f"Fold {fold}:")
-        print(f"Training XTX:\n{XTX}")
-        print(f"Training XTY:\n{XTY}")
+        print(f"Training XTWX:\n{XTX}")
+        print(f"Training XTWY:\n{XTY}")
         print()
 
-    # We can also get only XTX or only XTY. However, if both XTX and XTY are needed,
+    # We can also get only XTWX or only XTWY. However, if both XTWX and XTWY are needed,
     # it is more efficient to call training_XTX_XTY.
     print("Training set matrices using training_XTX and training_XTY:")
     for fold in cvm.folds_dict.keys():
         XTX = cvm.training_XTX(fold)
         print(f"Fold {fold}:")
-        print(f"Training XTX:\n{XTX}")
+        print(f"Training XTWX:\n{XTX}")
         print()
     for fold in cvm.folds_dict.keys():
         XTY = cvm.training_XTY(fold)
         print(f"Fold {fold}:")
-        print(f"Training XTY:\n{XTY}")
+        print(f"Training XTWY:\n{XTY}")
         print()
 
     # We can also fit on new X and Y. This will recompute the global statistics and
     # allow us to compute training set matrices for the new data, ensuring that the
     # centering and scaling is done correctly.
-    X = np.array(
-        [
-            [-1, 2, 3],
-            [-4, 5, 6],
-            [-7, 8, 9],
-            [-10, 11, 12]
-        ]
-    )
+    X = np.array([[-1, 2, 3], [-4, 5, 6], [-7, 8, 9], [-10, 11, 12]])
 
-    Y = np.array(
-        [
-            [-1, 2],
-            [-3, 4],
-            [-5, 6],
-            [-7, 8]
-        ]
-    )
+    Y = np.array([[-1, 2], [-3, 4], [-5, 6], [-7, 8]])
 
     print("Fitting on new data:")
     cvm.fit(X, Y)
     for fold in cvm.folds_dict.keys():
         XTX, XTY = cvm.training_XTX_XTY(fold)
         print(f"Fold {fold}:")
-        print(f"Training XTX:\n{XTX}")
-        print(f"Training XTY:\n{XTY}")
+        print(f"Training XTWX:\n{XTX}")
+        print(f"Training XTWY:\n{XTY}")
         print()
