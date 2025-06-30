@@ -12,26 +12,13 @@ import numpy as np
 
 from cvmatrix.cvmatrix import CVMatrix
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Create some example data. X must have shape (N, K) or (N,) and Y must have shape
     # (N, M) or (N,). It follows that the number of samples in X and Y must be equal.
     # Y can be None if only XTX is needed.
-    X = np.array(
-        [
-            [1, 2, 3],
-            [4, 5, 6],
-            [7, 8, 9],
-            [10, 11, 12]
-        ]
-    )
-    Y = np.array(
-        [
-            [1, 2],
-            [3, 4],
-            [5, 6],
-            [7, 8]
-        ]
-    )
+    X = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]])
+    Y = np.array([[1, 2], [3, 4], [5, 6], [7, 8]])
+    weights = np.array([4.2, 13.37, 3.14, 0])
 
     # The cross-validation folds must be of type Hashable (e.g., int, str, etc.)
     # They must be passed in an iterable of length equal to the number of samples in X
@@ -53,7 +40,7 @@ if __name__ == '__main__':
     # It also computes global statistics that will be reused when determining the
     # centering and scaling of the training set. Only statistics that are relevant for
     # the chosen centering and scaling are computed.
-    cvm.fit(X, Y)
+    cvm.fit(X, Y, weights)
 
     # The unique folds and associated indices are stored in the
     # folds_dict
@@ -91,23 +78,9 @@ if __name__ == '__main__':
     # We can also fit on new X and Y. This will recompute the global statistics and
     # allow us to compute training set matrices for the new data, ensuring that the
     # centering and scaling is done correctly.
-    X = np.array(
-        [
-            [-1, 2, 3],
-            [-4, 5, 6],
-            [-7, 8, 9],
-            [-10, 11, 12]
-        ]
-    )
+    X = np.array([[-1, 2, 3], [-4, 5, 6], [-7, 8, 9], [-10, 11, 12]])
 
-    Y = np.array(
-        [
-            [-1, 2],
-            [-3, 4],
-            [-5, 6],
-            [-7, 8]
-        ]
-    )
+    Y = np.array([[-1, 2], [-3, 4], [-5, 6], [-7, 8]])
 
     print("Fitting on new data:")
     cvm.fit(X, Y)
