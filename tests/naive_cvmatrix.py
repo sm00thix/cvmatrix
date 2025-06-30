@@ -162,8 +162,8 @@ class NaiveCVMatrix(CVMatrix):
         self,
         mat: np.ndarray,
         mean_row: np.ndarray,
-        weights: np.ndarray | None,
-        scale_factor: float | None,
+        weights: Union[np.ndarray, None],
+        scale_factor: Union[float, None],
     ) -> np.ndarray:
         """
         Computes the standard deviation of each column in `mat`, weighted by `w`.
