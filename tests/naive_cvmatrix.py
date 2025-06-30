@@ -33,34 +33,32 @@ class NaiveCVMatrix(CVMatrix):
 
     center_X : bool, optional, default=True
         Whether to center `X` before computation of
-        :math:`\mathbf{X}^{\mathbf{T}}\mathbf{X}` and
-        :math:`\mathbf{X}^{\mathbf{T}}\mathbf{Y}` by subtracting its row of column-wise
-        means from each row. The row of column-wise means is computed on the training
-        set for each fold to avoid data leakage.
+        :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` and
+        :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}` by subtracting its row of
+        column-wise weighted means from each row. The row of column-wise weighted
+        means is computed on the training set for each fold to avoid data leakage.
 
     center_Y : bool, optional, default=True
         Whether to center `Y` before computation of
-        :math:`\mathbf{X}^{\mathbf{T}}\mathbf{Y}` by subtracting its row of column-wise
-        means from each row. The row of column-wise means is computed on the training
-        set for each fold to avoid data leakage. This parameter is ignored if `Y` is
-        `None`.
+        :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}` by subtracting its row of
+        column-wise weighted means from each row. The row of column-wise weighted means
+        is computed on the training set for each fold to avoid data leakage. This
+        parameter is ignored if `Y` is `None`.
 
     scale_X : bool, optional, default=True
         Whether to scale `X` before computation of
-        :math:`\mathbf{X}^{\mathbf{T}}\mathbf{X}` and
-        :math:`\mathbf{X}^{\mathbf{T}}\mathbf{Y}` by dividing each row with the row of
-        `X`'s column-wise standard deviations. Bessel's correction for the unbiased
-        estimate of the sample standard deviation is used. The row of column-wise
-        standard deviations is computed on the training set for each fold to avoid data
-        leakage.
+        :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` and
+        :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}` by dividing each row with
+        the row of `X`'s column-wise weighted standard deviations. The row of
+        column-wise weighted standard deviations is computed on the training set for
+        each fold to avoid data leakage.
 
     scale_Y : bool, optional, default=True
         Whether to scale `Y` before computation of
-        :math:`\mathbf{X}^{\mathbf{T}}\mathbf{Y}` by dividing each row with the row of
-        `X`'s column-wise standard deviations. Bessel's correction for the unbiased
-        estimate of the sample standard deviation is used. The row of column-wise
-        standard deviations is computed on the training set for each fold to avoid data
-        leakage. This parameter is ignored if `Y` is `None`.
+        :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}` by dividing each row with
+        the row of `X`'s column-wise weighted standard deviations. The row of
+        column-wise weighted standard deviations is computed on the training set for
+        each fold to avoid data leakage. This parameter is ignored if `Y` is `None`.
 
     ddof : int, optional, default=1
         The delta degrees of freedom used in the computation of the sample standard
@@ -84,7 +82,7 @@ class NaiveCVMatrix(CVMatrix):
         `False`, the weigthed matrix products are computed by constructing a
         diagonal matrix from the weights and then performing regular matrix
         multiplication. The hadamard or matrix product is always computed over the
-        smallest of `X` and `Y` if both XTX and XTY are requested to speed up the
+        smallest of `X` and `Y` if both XTWX and XTWY are requested to speed up the
         computation. This parameter is ignored if `W` is `None`.
     """
 
@@ -120,11 +118,7 @@ class NaiveCVMatrix(CVMatrix):
         weights: Union[None, npt.ArrayLike] = None,
     ) -> None:
         """
-        Loads and stores `X` and `Y` for cross-validation. Computes dataset-wide
-        :math:`\mathbf{X}^{\mathbf{T}}\mathbf{X}` and, if `Y` is not `None`,
-        :math:`\mathbf{X}^{\mathbf{T}}\mathbf{Y}`. If `center_X`, `center_Y`,
-        `scale_X`, or `scale_Y` is `True`, the corresponding global statistics are also
-        computed.
+        Loads and stores `X`, `Y`, and `weights` for cross-validation.
 
         Parameters
         ----------

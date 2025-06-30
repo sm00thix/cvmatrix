@@ -63,13 +63,13 @@ The `cvmatrix` software package now also features **weigthed matrix produts** $\
 > )
 > # Fit on X and Y
 > cvm.fit(X=X, Y=Y, weights=weights)
-> # Compute training set XTX and/or XTY for each fold
+> # Compute training set XTWX and/or XTWY for each fold
 > for fold in cvm.folds_dict.keys():
->     # Get both XTX and XTY
+>     # Get both XTWX and XTWY
 >     training_XTX, training_XTY = cvm.training_XTX_XTY(fold)
->     # Get only XTX
+>     # Get only XTWX
 >     training_XTX = cvm.training_XTX(fold)
->     # Get only XTY
+>     # Get only XTWY
 >     training_XTY = cvm.training_XTY(fold)
 
 ### Examples
