@@ -731,14 +731,17 @@ class CVMatrix:
         ) and self.Y_total is not None:
             self.sum_Y_total = np.sum(self.Yw_total, axis=0, keepdims=True)
         if self.scale_X:
-            self.sum_sq_X_total = np.expand_dims(
-                np.einsum("ij, ij -> j", self.Xw_total, self.X_total), axis=0
+            self.sum_sq_X_total = np.sum(
+                self.Xw_total * self.X_total, axis=0, keepdims=True
+            )
+            self.sum_sq_X_total = np.sum(
+                self.Xw_total * self.X_total, axis=0, keepdims=True
             )
         else:
             self.sum_sq_X_total = None
         if self.scale_Y and self.Y_total is not None:
-            self.sum_sq_Y_total = np.expand_dims(
-                np.einsum("ij, ij -> j", self.Yw_total, self.Y_total), axis=0
+            self.sum_sq_Y_total = np.sum(
+                self.Yw_total * self.Y_total, axis=0, keepdims=True
             )
         else:
             self.sum_sq_Y_total = None
