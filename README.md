@@ -96,7 +96,7 @@ Guidelines](https://github.com/Sm00thix/CVMatrix/blob/main/CONTRIBUTING.md).
 
 1. [Engstrøm, O.-C. G. and Jensen, M. H. (2025). Fast partition-based cross-validation with centering and scaling for $\mathbf{X}^\mathbf{T}\mathbf{X}$ and $\mathbf{X}^\mathbf{T}\mathbf{Y}$. *Journal of Chemometrics*, 39(3).](https://doi.org/10.1002/cem.70008)
 2. [Dayal, B. S. and MacGregor, J. F. (1997). Improved PLS algorithms. *Journal of Chemometrics*, 11(1), 73-85.](https://doi.org/10.1002/(SICI)1099-128X(199701)11:1%3C73::AID-CEM435%3E3.0.CO;2-%23?)
-3. [Engstrøm, O.-C. G. and Dreier, E. S. and Jespersen, B. M. and Pedersen, K. S. IKPLS: Improved Kernel Partial Least Squares and Fast Cross-Validation Algorithms for Python with CPU and GPU Implementations Using NumPy and JAX. *Journal of Open Source Software*, 9(99).](https://doi.org/10.21105/joss.06533)
+3. [Engstrøm, O.-C. G. and Dreier, E. S. and Jespersen, B. M. and Pedersen, K. S. (2024). IKPLS: Improved Kernel Partial Least Squares and Fast Cross-Validation Algorithms for Python with CPU and GPU Implementations Using NumPy and JAX. *Journal of Open Source Software*, 9(99).](https://doi.org/10.21105/joss.06533)
 
 ## Funding
 - Up until May 31st 2025, this work has been carried out as part of an industrial Ph. D. project receiving funding from [FOSS Analytical A/S](https://www.fossanalytics.com/) and [The Innovation Fund Denmark](https://innovationsfonden.dk/en). Grant number 1044-00108B.

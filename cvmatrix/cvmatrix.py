@@ -99,8 +99,6 @@ class CVMatrix:
         self.N = None
         self.K = None
         self.M = None
-        self.X_total_mean = None
-        self.Y_total_mean = None
         self.XTX_total = None
         self.XTY_total = None
         self.sum_X_total = None
@@ -146,7 +144,6 @@ class CVMatrix:
         ValueError
             If `weights` is provided and contains negative values.
         """
-
         self._init_mats(X, Y, weights)
         self._init_weighted_mats()
         self._init_matrix_products()
@@ -353,26 +350,19 @@ class CVMatrix:
                         "The number of non-zero weights in the training set must be "
                         "greater than zero."
                     )
-            sum_w_total_over_sum_w_train = self.sum_w_total / sum_w_train
-            sum_w_val_over_sum_w_train = sum_w_val / sum_w_train
-
         if self.center_X or self.scale_X or (return_XTY and self.center_Y):
             sum_X_val = np.sum(X_val, axis=0, keepdims=True)
             X_train_mean = self._compute_training_mat_mean(
                 sum_X_val,
-                sum_w_val,
-                self.X_total_mean,
-                sum_w_total_over_sum_w_train,
-                sum_w_val_over_sum_w_train,
+                self.sum_X_total,
+                sum_w_train,
             )
         if return_XTY and (self.center_X or self.center_Y or self.scale_Y):
             sum_Y_val = np.sum(Y_val, axis=0, keepdims=True)
             Y_train_mean = self._compute_training_mat_mean(
                 sum_Y_val,
-                sum_w_val,
-                self.Y_total_mean,
-                sum_w_total_over_sum_w_train,
-                sum_w_val_over_sum_w_train,
+                self.sum_Y_total,
+                sum_w_train,
             )
         if self.scale_X or (self.scale_Y and return_XTY):
             divisor = self._compute_std_divisor(sum_w_train, num_nonzero_w_train)
@@ -519,10 +509,8 @@ class CVMatrix:
     def _compute_training_mat_mean(
         self,
         sum_mat_val: np.ndarray,
-        sum_w_val: float,
-        mat_total_mean: np.ndarray,
-        sum_w_total_over_sum_w_train: float,
-        sum_w_val_over_sum_w_train: float,
+        sum_mat_total: np.ndarray,
+        sum_w_train: float,
     ) -> np.ndarray:
         """
         Computes the row of column-wise means of a matrix for a given fold.
@@ -532,34 +520,18 @@ class CVMatrix:
         sum_mat_val : Array of shape (1, K) or (1, M)
             The row of column-wise sums of validation set of `Xw` or `Yw`.
 
-        sum_w_val : float
-            The sum of weights in the validation set.
+        sum_mat_total : Array of shape (1, K) or (1, M)
+            The row of column-wise sums of the total `Xw` or `Yw`.
 
-        mat_total_mean : Array of shape (1, K) or (1, M)
-            The row of column-wise weighted means of the total matrix.
-
-        sum_w_total_over_sum_w_train : float
-            The ratio of the sum of weights in the entire dataset to the sum of weights
-            in the training set.
-
-        sum_w_val_over_sum_w_train : float
-            The ratio of the sum of weights in the validation set to the sum of weights
-            in the training set.
-
-        sum_w_val : float
-            The sum of weights in the validation set.
+        sum_w_train : float
+            The sum of weights in the training set.
 
         Returns
         -------
         Array of shape (1, K) or (1, M)
             The row of column-wise means of the training set matrix.
         """
-        train_part_contribution = sum_w_total_over_sum_w_train * mat_total_mean
-        if sum_w_val <= self.eps:
-            return train_part_contribution
-        return train_part_contribution - sum_w_val_over_sum_w_train * (
-            sum_mat_val / sum_w_val
-        )
+        return (sum_mat_total - sum_mat_val) / sum_w_train
 
     def _compute_std_divisor(
         self, sum_w_train: float, num_nonzero_w_train: int
@@ -745,24 +717,19 @@ class CVMatrix:
         """
         Initializes the global statistics for `X` and `Y`.
         """
-        if self.w_total is not None:
-            self.sum_w_total = np.sum(self.w_total)
-            self.num_nonzero_w_total = np.count_nonzero(self.w_total)
-        else:
-            self.sum_w_total = self.N
-            self.num_nonzero_w_total = self.N
+        if self.center_X or self.center_Y or self.scale_X or self.scale_Y:
+            if self.w_total is not None:
+                self.sum_w_total = np.sum(self.w_total)
+                self.num_nonzero_w_total = np.count_nonzero(self.w_total)
+            else:
+                self.sum_w_total = self.N
+                self.num_nonzero_w_total = self.N
         if self.center_X or self.center_Y or self.scale_X:
             self.sum_X_total = np.sum(self.Xw_total, axis=0, keepdims=True)
-            self.X_total_mean = self.sum_X_total / self.sum_w_total
-        else:
-            self.X_total_mean = None
         if (
             self.center_X or self.center_Y or self.scale_Y
         ) and self.Y_total is not None:
             self.sum_Y_total = np.sum(self.Yw_total, axis=0, keepdims=True)
-            self.Y_total_mean = self.sum_Y_total / self.sum_w_total
-        else:
-            self.Y_total_mean = None
         if self.scale_X:
             self.sum_sq_X_total = np.expand_dims(
                 np.einsum("ij, ij -> j", self.Xw_total, self.X_total), axis=0
@@ -788,7 +755,6 @@ class CVMatrix:
             An iterable defining cross-validation splits. Each unique value in
             `folds` corresponds to a different fold.
         """
-
         folds_dict: "defaultdict[Hashable, list[int]]" = defaultdict(list)
         for i, num in enumerate(folds):
             folds_dict[num].append(i)
