@@ -734,9 +734,6 @@ class CVMatrix:
             self.sum_sq_X_total = np.sum(
                 self.Xw_total * self.X_total, axis=0, keepdims=True
             )
-            self.sum_sq_X_total = np.sum(
-                self.Xw_total * self.X_total, axis=0, keepdims=True
-            )
         else:
             self.sum_sq_X_total = None
         if self.scale_Y and self.Y_total is not None:
