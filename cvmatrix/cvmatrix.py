@@ -11,7 +11,7 @@ E-mail: ole.e@di.ku.dk
 
 from collections import defaultdict
 from collections.abc import Hashable
-from typing import Iterable, Union
+from typing import Iterable, Tuple, Union
 
 import numpy as np
 from numpy import typing as npt
@@ -260,6 +260,170 @@ class CVMatrix:
         """
         return self._training_matrices(True, True, fold)
 
+    def _get_sum_w_train_and_num_nonzero_w_train(
+        self, val_indices: npt.NDArray[np.int_]
+    ) -> Tuple[float, float]:
+        """
+        Returns a tuple containing the sum of weights in the training set and the number
+        of non-zero weights in the training set. If `w_total` is `None`, it returns the
+        size of the training set as both the sum of weights and the number of
+        non-zero weights.
+
+        Returns
+        -------
+        tuple of floats
+            The sum of weights in the training set and the number of non-zero weights in
+            the training set.
+
+        Raises
+        ------
+        ValueError
+            If the number of non-zero weights in the training set is zero, which would
+            make it impossible to compute either of training set means or standard
+            deviations.
+        """
+        if self.w_total is None:
+            sum_w_val = np.asarray(val_indices.size, dtype=self.dtype)
+            sum_w_train = self.sum_w_total - sum_w_val
+            return (sum_w_train, sum_w_train)
+        w_val = self.w_total[val_indices]
+        sum_w_val = np.sum(w_val)
+        sum_w_train = self.sum_w_total - sum_w_val
+        num_nonzero_w_val = np.count_nonzero(w_val)
+        num_nonzero_w_train = np.asarray(
+            self.num_nonzero_w_total - num_nonzero_w_val, dtype=self.dtype
+        )
+        if num_nonzero_w_train == 0:
+            raise ValueError(
+                "The number of non-zero weights in the training set must be "
+                "greater than zero."
+            )
+        return sum_w_train, num_nonzero_w_train
+
+    def _compute_training_stats(
+        self,
+        val_indices: npt.NDArray[np.int_],
+        X_val: Union[None, np.ndarray],
+        X_val_unweighted: Union[None, np.ndarray],
+        Y_val: Union[None, np.ndarray],
+        Y_val_unweighted: Union[None, np.ndarray],
+        return_X_mean: bool,
+        return_X_std: bool,
+        return_Y_mean: bool,
+        return_Y_std: bool,
+    ) -> Tuple[
+        Union[None, np.ndarray],
+        Union[None, np.ndarray],
+        Union[None, np.ndarray],
+        Union[None, np.ndarray],
+        Union[None, float],
+    ]:
+        """
+        Computes the training set statistics for the given fold. The statistics include
+        the row of column-wise weighted means and standard deviations for `X` and `Y`.
+
+        Parameters
+        ----------
+        val_indices : Array of shape (N_val,)
+            The indices of the validation set samples for the given fold.
+
+        X_val : None or Array of shape (N_val, K)
+            The validation set of weighted predictor variables. If `None`, no
+            statistics for `X` are computed. Required if `return_X_mean` or
+            `return_X_std` is `True`.
+
+        X_val_unweighted : None or Array of shape (N_val, K)
+            The validation set of unweighted predictor variables. Required if
+            `return_X_std` is `True`.
+
+        Y_val : None or Array of shape (N_val, M)
+            The validation set of weighted response variables. If `None`, no statistics
+            for `Y` are computed. Required if `return_Y_mean` or `return_Y_std` is
+            `True`.
+
+        Y_val_unweighted : None or Array of shape (N_val, M)
+            The validation set of unweighted response variables. Required if
+            `return_Y_std` is `True`.
+
+        return_X_mean : bool
+            Whether to compute the row of column-wise weighted means for `X`.
+
+        return_X_std : bool
+            Whether to compute the row of column-wise weighted standard deviations for
+            `X`.
+
+        return_Y_mean : bool
+            Whether to compute the row of column-wise weighted means for `Y`.
+
+        return_Y_std : bool
+            Whether to compute the row of column-wise weighted standard deviations for
+            `Y`.
+
+        Returns
+        -------
+        tuple of Union[None, np.ndarray]
+            A tuple containing the row of column-wise weighted means for `X`, the row
+            of column-wise weighted standard deviations for `X`, the row of column-wise
+            weighted means for `Y`, the row of column-wise weighted standard deviations
+            for `Y`, and the sum of training weights. If a statistic is not computed,
+            it is `None`.
+        """
+        if (
+            not return_X_mean
+            and not return_X_std
+            and not return_Y_mean
+            and not return_Y_std
+        ):
+            return None, None, None, None, None
+        sum_w_train, num_nonzero_w_train = (
+            self._get_sum_w_train_and_num_nonzero_w_train(val_indices)
+        )
+        if return_X_mean or return_X_std:
+            sum_X_val = np.sum(X_val, axis=0, keepdims=True)
+            X_train_mean = self._compute_training_mat_mean(
+                sum_X_val,
+                self.sum_X_total,
+                sum_w_train,
+            )
+        if return_Y_mean or return_Y_std:
+            sum_Y_val = np.sum(Y_val, axis=0, keepdims=True)
+            Y_train_mean = self._compute_training_mat_mean(
+                sum_Y_val,
+                self.sum_Y_total,
+                sum_w_train,
+            )
+        if return_X_std or return_Y_std:
+            divisor = self._compute_std_divisor(sum_w_train, num_nonzero_w_train)
+        if return_X_std:
+            X_train_std = self._compute_training_mat_std(
+                sum_X_val,
+                X_val,
+                X_val_unweighted,
+                X_train_mean,
+                self.sum_X_total,
+                self.sum_sq_X_total,
+                sum_w_train,
+                divisor,
+            )
+        if return_Y_std:
+            Y_train_std = self._compute_training_mat_std(
+                sum_Y_val,
+                Y_val,
+                Y_val_unweighted,
+                Y_train_mean,
+                self.sum_Y_total,
+                self.sum_sq_Y_total,
+                sum_w_train,
+                divisor,
+            )
+        return (
+            X_train_mean if return_X_mean else None,
+            X_train_std if return_X_std else None,
+            Y_train_mean if return_Y_mean else None,
+            Y_train_std if return_Y_std else None,
+            sum_w_train,
+        )
+
     def _training_matrices(
         self, return_XTX: bool, return_XTY: bool, fold: Hashable
     ) -> Union[np.ndarray, tuple[np.ndarray, np.ndarray]]:
@@ -328,66 +492,29 @@ class CVMatrix:
             else:
                 Y_val = self.Yw_total[val_indices]
                 Y_val_unweighted = self.Y_total[val_indices]
-        if (
-            self.center_X
-            or self.scale_X
-            or (return_XTY and (self.center_Y or self.scale_Y))
-        ):
-            if self.w_total is None:
-                sum_w_val = np.asarray(val_indices.size, dtype=self.dtype)
-                sum_w_train = self.sum_w_total - sum_w_val
-                num_nonzero_w_train = sum_w_train
-            else:
-                w_val = self.w_total[val_indices]
-                sum_w_val = np.sum(w_val)
-                sum_w_train = self.sum_w_total - sum_w_val
-                num_nonzero_w_val = np.count_nonzero(w_val)
-                num_nonzero_w_train = np.asarray(
-                    self.num_nonzero_w_total - num_nonzero_w_val, dtype=self.dtype
-                )
-                if num_nonzero_w_train == 0:
-                    raise ValueError(
-                        "The number of non-zero weights in the training set must be "
-                        "greater than zero."
-                    )
-        if self.center_X or self.scale_X or (return_XTY and self.center_Y):
-            sum_X_val = np.sum(X_val, axis=0, keepdims=True)
-            X_train_mean = self._compute_training_mat_mean(
-                sum_X_val,
-                self.sum_X_total,
-                sum_w_train,
+        X_train_mean, X_train_std, Y_train_mean, Y_train_std, sum_w_train = (
+            self._compute_training_stats(
+                val_indices=val_indices,
+                X_val=(
+                    X_val
+                    if self.center_X or self.scale_X or (return_XTY and self.center_Y)
+                    else None
+                ),
+                X_val_unweighted=X_val_unweighted if self.scale_X else None,
+                Y_val=(
+                    Y_val
+                    if return_XTY and (self.center_X or self.center_Y or self.scale_Y)
+                    else None
+                ),
+                Y_val_unweighted=(
+                    Y_val_unweighted if return_XTY and self.scale_Y else None
+                ),
+                return_X_mean=self.center_X or (return_XTY and self.center_Y),
+                return_Y_mean=return_XTY and (self.center_X or self.center_Y),
+                return_X_std=self.scale_X,
+                return_Y_std=return_XTY and self.scale_Y,
             )
-        if return_XTY and (self.center_X or self.center_Y or self.scale_Y):
-            sum_Y_val = np.sum(Y_val, axis=0, keepdims=True)
-            Y_train_mean = self._compute_training_mat_mean(
-                sum_Y_val,
-                self.sum_Y_total,
-                sum_w_train,
-            )
-        if self.scale_X or (self.scale_Y and return_XTY):
-            divisor = self._compute_std_divisor(sum_w_train, num_nonzero_w_train)
-        if self.scale_X:
-            X_train_std = self._compute_training_mat_std(
-                sum_X_val,
-                X_val,
-                X_val_unweighted,
-                X_train_mean,
-                self.sum_X_total,
-                self.sum_sq_X_total,
-                sum_w_train,
-                divisor,
-            )
-        if self.scale_Y and return_XTY:
-            Y_train_std = self._compute_training_mat_std(
-                sum_Y_val,
-                Y_val,
-                Y_val_unweighted,
-                Y_train_mean,
-                self.sum_Y_total,
-                self.sum_sq_Y_total,
-                sum_w_train,
-                divisor,
-            )
+        )
         if return_XTX and return_XTY:
             return (
                 self._training_kernel_matrix(
