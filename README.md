@@ -64,13 +64,23 @@ The `cvmatrix` software package now also features **weigthed matrix produts** $\
 > # Fit on X and Y
 > cvm.fit(X=X, Y=Y, weights=weights)
 > # Compute training set XTWX and/or XTWY for each fold
-> for fold in cvm.folds_dict.keys():
->     # Get both XTWX and XTWY
->     training_XTX, training_XTY = cvm.training_XTX_XTY(fold)
->     # Get only XTWX
->     training_XTX = cvm.training_XTX(fold)
->     # Get only XTWY
->     training_XTY = cvm.training_XTY(fold)
+> for fold in cvm.folds_dict:
+>     # Get both XTWX, XTWY, and weighted statistics
+>     result = cvm.training_XTX_XTY(fold)
+>     (training_XTWX, training_XTWY) = result[0]
+>     (training_X_mean, training_X_std, training_Y_mean, training_Y_std) = result[1]
+>     
+>     # Get only XTWX and weighted statistics for X.
+>     # Weighted statistics for Y are returned as None as they are not computed when
+>     # only XTWX is requested.
+>     result = cvm.training_XTX(fold)
+>     training_XTWX = result[0]
+>     (training_X_mean, training_X_std, training_Y_mean, training_Y_std) = result[1]
+>     
+>     # Get only XTWY and weighted statistics
+>     result = cvm.training_XTY(fold)
+>     training_XTWY = result[0]
+>     (training_X_mean, training_X_std, training_Y_mean, training_Y_std) = result[1]
 
 ### Examples
 In [examples](https://github.com/Sm00thix/CVMatrix/tree/main/examples), you will find:
