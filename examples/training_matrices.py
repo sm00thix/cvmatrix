@@ -51,28 +51,45 @@ if __name__ == "__main__":
 
     # Compute the training set matrices for each fold.
     print("Training set matrices using training_XTX_XTY:")
-    for fold in cvm.folds_dict.keys():
+    for fold in cvm.folds_dict:
         # Notice that the samples associated with fold are considered part of the
         # validation set. The training set is then all samples not associated with this
         # fold.
-        XTX, XTY = cvm.training_XTX_XTY(fold)
+        result = cvm.training_XTX_XTY(fold)
+        (XTWX, XTWY), (X_mean, X_std, Y_mean, Y_std) = result
         print(f"Fold {fold}:")
-        print(f"Training XTWX:\n{XTX}")
-        print(f"Training XTWY:\n{XTY}")
+        print(f"Training XTWX:\n{XTWX}")
+        print(f"Training XTWY:\n{XTWY}")
+        print(f"Training weighted X mean:\n{X_mean}")
+        print(f"Training weighted X std:\n{X_std}")
+        print(f"Training weighted Y mean:\n{Y_mean}")
+        print(f"Training weighted Y std:\n{Y_std}")
         print()
 
     # We can also get only XTWX or only XTWY. However, if both XTWX and XTWY are needed,
     # it is more efficient to call training_XTX_XTY.
     print("Training set matrices using training_XTX and training_XTY:")
-    for fold in cvm.folds_dict.keys():
-        XTX = cvm.training_XTX(fold)
+    for fold in cvm.folds_dict:
+        result = cvm.training_XTX(fold)
+        XTWX, (X_mean, X_std, Y_mean, Y_std) = result
         print(f"Fold {fold}:")
-        print(f"Training XTWX:\n{XTX}")
+        print(f"Training XTWX:\n{XTWX}")
+        print(f"Training weighted X mean:\n{X_mean}")
+        print(f"Training weighted X std:\n{X_std}")
+
+        # These two are None as they are not computed when only XTX is requested.
+        print(f"Training weighted Y mean:\n{Y_mean}")
+        print(f"Training weighted Y std:\n{Y_std}")
         print()
-    for fold in cvm.folds_dict.keys():
-        XTY = cvm.training_XTY(fold)
+    for fold in cvm.folds_dict:
+        result = cvm.training_XTY(fold)
+        XTWY, (X_mean, X_std, Y_mean, Y_std) = result
         print(f"Fold {fold}:")
-        print(f"Training XTWY:\n{XTY}")
+        print(f"Training XTWY:\n{XTWY}")
+        print(f"Training weighted X mean:\n{X_mean}")
+        print(f"Training weighted X std:\n{X_std}")
+        print(f"Training weighted Y mean:\n{Y_mean}")
+        print(f"Training weighted Y std:\n{Y_std}")
         print()
 
     # We can also fit on new X and Y. This will recompute the global statistics and
@@ -84,9 +101,27 @@ if __name__ == "__main__":
 
     print("Fitting on new data:")
     cvm.fit(X, Y)
-    for fold in cvm.folds_dict.keys():
-        XTX, XTY = cvm.training_XTX_XTY(fold)
+    for fold in cvm.folds_dict:
+        result = cvm.training_XTX_XTY(fold)
+        (XTWX, XTWY), (X_mean, X_std, Y_mean, Y_std) = result
         print(f"Fold {fold}:")
-        print(f"Training XTWX:\n{XTX}")
-        print(f"Training XTWY:\n{XTY}")
+        print(f"Training XTWX:\n{XTWX}")
+        print(f"Training XTWY:\n{XTWY}")
+        print(f"Training weighted X mean:\n{X_mean}")
+        print(f"Training weighted X std:\n{X_std}")
+        print(f"Training weighted Y mean:\n{Y_mean}")
+        print(f"Training weighted Y std:\n{Y_std}")
+        print()
+
+    # We can also get the training set statistics without computing the training set
+    # matrices. This is useful if we only need the statistics for further processing.
+    print("Training set statistics:")
+    for fold in cvm.folds_dict:
+        result = cvm.training_statistics(fold)
+        X_mean, X_std, Y_mean, Y_std = result
+        print(f"Fold {fold}:")
+        print(f"Training weighted X mean:\n{X_mean}")
+        print(f"Training weighted X std:\n{X_std}")
+        print(f"Training weighted Y mean:\n{Y_mean}")
+        print(f"Training weighted Y std:\n{Y_std}")
         print()
