@@ -369,6 +369,33 @@ class TestClass:
         naive.fit(X, Y, weights)
         return naive
 
+    def check_equivalent_stats(
+        self,
+        naive_stats: Union[None, npt.NDArray[np.float64]],
+        fast_stats: Union[None, npt.NDArray[np.float64]],
+        err_msg: str = "",
+        atol=1e-8,
+    ) -> None:
+        """
+        Checks if the statistics computed by the NaiveCVMatrix and CVMatrix models are
+        equivalent.
+
+        Parameters
+        ----------
+        naive_stats : Union[None, npt.NDArray[np.float64]]
+            The statistics computed by the NaiveCVMatrix model.
+
+        fast_stats : Union[None, npt.NDArray[np.float64]]
+            The statistics computed by the CVMatrix model.
+
+        err_msg : str, optional
+            An error message to display if the statistics are not equivalent.
+        """
+        for naive_st, fast_st in zip(naive_stats, fast_stats):
+            if fast_st is None or naive_st is None:
+                return
+            assert_allclose(fast_st, naive_st, err_msg=err_msg, atol=atol)
+
     def check_equivalent_matrices(
         self,
         naive: NaiveCVMatrix,
@@ -409,18 +436,19 @@ class TestClass:
             if naive.Y_total is not None:
                 # Check if the matrices are equivalent for the training_XTX_XTY method
                 # between the NaiveCVMatrix and CVMatrix models.
-                fast_XTX, fast_XTY = fast.training_XTX_XTY(fold)
-                naive_XTX, naive_XTY = naive.training_XTX_XTY(fold)
+                (fast_XTX, fast_XTY), fast_stats = fast.training_XTX_XTY(fold)
+                (naive_XTX, naive_XTY), naive_stats = naive.training_XTX_XTY(fold)
+                self.check_equivalent_stats(naive_stats, fast_stats, err_msg=error_msg)
                 assert_allclose(fast_XTX, naive_XTX, err_msg=error_msg, atol=1e-8)
                 assert_allclose(fast_XTY, naive_XTY, err_msg=error_msg, atol=1e-8)
                 # Check if the matrices are equivalent for the training_XTX and
                 # training_XTY methods between the NaiveCVMatrix and CVMatrix models.
                 # Also check if the matrices are equivalent for the training_XTX,
                 # training_XTY, and training_XTX_XTY methods.
-                direct_naive_XTX = naive.training_XTX(fold)
-                direct_fast_XTX = fast.training_XTX(fold)
-                direct_naive_XTY = naive.training_XTY(fold)
-                direct_fast_XTY = fast.training_XTY(fold)
+                direct_naive_XTX, direct_naive_XTX_stats = naive.training_XTX(fold)
+                direct_fast_XTX, direct_fast_XTX_stats = fast.training_XTX(fold)
+                direct_naive_XTY, direct_naive_XTY_stats = naive.training_XTY(fold)
+                direct_fast_XTY, direct_fast_XTY_stats = fast.training_XTY(fold)
                 assert_allclose(
                     direct_fast_XTX, direct_naive_XTX, err_msg=error_msg, atol=1e-8
                 )
@@ -429,12 +457,25 @@ class TestClass:
                 )
                 assert_allclose(direct_fast_XTX, fast_XTX, err_msg=error_msg, atol=1e-8)
                 assert_allclose(direct_fast_XTY, fast_XTY, err_msg=error_msg, atol=1e-8)
+                self.check_equivalent_stats(
+                    direct_naive_XTX_stats,
+                    direct_fast_XTX_stats,
+                    err_msg=error_msg,
+                )
+                self.check_equivalent_stats(
+                    direct_naive_XTY_stats,
+                    direct_fast_XTY_stats,
+                    err_msg=error_msg,
+                )
             else:
                 # Check if the matrices are equivalent for the training_XTX method
                 # between the NaiveCVMatrix and CVMatrix models.
-                naive_XTX = naive.training_XTX(fold)
-                fast_XTX = fast.training_XTX(fold)
+                naive_XTX, naive_XTX_stats = naive.training_XTX(fold)
+                fast_XTX, fast_XTX_stats = fast.training_XTX(fold)
                 assert_allclose(fast_XTX, naive_XTX, err_msg=error_msg, atol=1e-8)
+                self.check_equivalent_stats(
+                    naive_XTX_stats, fast_XTX_stats, err_msg=error_msg
+                )
 
     def test_all_preprocessing_combinations(self):
         """
@@ -442,10 +483,10 @@ class TestClass:
         equivalent for basic settings.
         """
         X = self.load_X()[:, :5]  # Use only the first 5 variables for faster testing.
-        Y = self.load_Y(["Protein", "Moisture"])
+        Ys = [None, self.load_Y(["Protein", "Moisture"])]
         weights = self.load_weights(random=True)
         folds = self.load_Y(["split"]).squeeze()
-        assert X.shape[0] == Y.shape[0] == folds.shape[0] == weights.shape[0]
+        assert X.shape[0] == Ys[1].shape[0] == folds.shape[0] == weights.shape[0]
         assert len(np.unique(folds)) == 3
         center_Xs = [False, True]
         center_Ys = [False, True]
@@ -453,8 +494,8 @@ class TestClass:
         scale_Ys = [False, True]
         use_weights = [False, True]
         ddofs = [0, 1]
-        for center_X, center_Y, scale_X, scale_Y, use_w, ddof in product(
-            center_Xs, center_Ys, scale_Xs, scale_Ys, use_weights, ddofs
+        for center_X, center_Y, scale_X, scale_Y, use_w, ddof, Y in product(
+            center_Xs, center_Ys, scale_Xs, scale_Ys, use_weights, ddofs, Ys
         ):
             if use_w:
                 cur_weights = self.randomly_zero_weights(weights)
@@ -609,7 +650,10 @@ class TestClass:
             ddof,
             np.float64,
         )
-        match_str = "The number of non-zero weights in the training set must be greater than `ddof`."
+        match_str = (
+            "The number of non-zero weights in the training set must be greater than "
+            "`ddof`."
+        )
         with pytest.raises(ValueError, match=match_str):
             fast.training_XTX_XTY(double_nonzero_training_fold)
         if center_X or scale_X:
@@ -665,7 +709,10 @@ class TestClass:
                 ddof,
                 np.float64,
             )
-            match_str = "The number of non-zero weights in the training set must be greater than zero."
+            match_str = (
+                "The number of non-zero weights in the training set must be greater "
+                "than zero."
+            )
             fold_with_zero_train_w = unique_folds[0]
             with pytest.raises(ValueError, match=match_str):
                 fast.training_XTX_XTY(fold_with_zero_train_w)
@@ -871,17 +918,21 @@ class TestClass:
             X, Y, weights, folds, center_X, center_Y, scale_X, scale_Y, ddof, np.float64
         )
         self.check_equivalent_matrices(naive, fast, folds)
-        XTXs, XTYs = zip(
+        XTXs_XTYs, stats = zip(
             *[naive.training_XTX_XTY(val_split) for val_split in np.unique(folds)]
         )
+        XTXs, XTYs = zip(*XTXs_XTYs)
         X = np.expand_dims(X, axis=1)
         Y = np.expand_dims(Y, axis=1)
         fast.fit(X, Y, weights)
-        expanded_XTXs, expanded_XTYs = zip(
+        expanded_XTXs_expanded_XTYs, expanded_stats = zip(
             *[fast.training_XTX_XTY(val_split) for val_split in np.unique(folds)]
         )
+        expanded_XTXs, expanded_XTYs = zip(*expanded_XTXs_expanded_XTYs)
         assert_allclose(XTXs, expanded_XTXs)
         assert_allclose(XTYs, expanded_XTYs)
+        for naive_stats, fast_stats in zip(stats, expanded_stats):
+            self.check_equivalent_stats(naive_stats, fast_stats)
 
     def test_no_response_variables(self):
         """
@@ -928,12 +979,14 @@ class TestClass:
             naive, fast = self.fit_models(
                 X, Y, w, folds, center_X, center_Y, scale_X, scale_Y, ddof, dtype
             )
-            naive_XTXs, naive_XTYs = zip(
+            naive_XTXs_naive_XTYs, _naive_stats_all_folds = zip(
                 *[naive.training_XTX_XTY(val_split) for val_split in np.unique(folds)]
             )
-            fast_XTXs, fast_XTYs = zip(
+            naive_XTXs, naive_XTYs = zip(*naive_XTXs_naive_XTYs)
+            fast_XTXs_fast_XTYs, _fast_stats_all_folds = zip(
                 *[fast.training_XTX_XTY(val_split) for val_split in np.unique(folds)]
             )
+            fast_XTXs, fast_XTYs = zip(*fast_XTXs_fast_XTYs)
             for naive_XTX, fast_XTX in zip(naive_XTXs, fast_XTXs):
                 assert naive_XTX.dtype == dtype
                 assert fast_XTX.dtype == dtype
@@ -1023,3 +1076,66 @@ class TestClass:
             fast.training_XTX(invalid_split)
         with pytest.raises(ValueError, match=error_msg):
             fast.training_XTY(invalid_split)
+
+    def test_statistics_cvmatrix_methods(self):
+        """
+        Tests if the statistics computed by different CVMatrix methods are equivalent.
+        """
+        X = self.load_X()[:, :5]
+        Ys = [None, self.load_Y(["Protein", "Moisture"])]
+        folds = self.load_Y(["split"]).squeeze()
+        center_Xs = [False, True]
+        center_Ys = [False, True]
+        scale_Xs = [False, True]
+        scale_Ys = [False, True]
+        ddofs = [0, 1]
+        use_weights = [False, True]
+        for center_X, center_Y, scale_X, scale_Y, use_w, ddof, Y in product(
+            center_Xs, center_Ys, scale_Xs, scale_Ys, use_weights, ddofs, Ys
+        ):
+            diagnostic_msg = (
+                f"center_X: {center_X}, center_Y: {center_Y}, "
+                f"scale_X: {scale_X}, scale_Y: {scale_Y}, "
+                f"ddof: {ddof}, use_weights: {use_w}, use_Y: {Y is not None}"
+            )
+            if use_w:
+                weights = self.randomly_zero_weights(self.load_weights(random=True))
+            else:
+                weights = None
+            fast = self.fit_fast(
+                X,
+                Y,
+                weights,
+                folds,
+                center_X,
+                center_Y,
+                scale_X,
+                scale_Y,
+                ddof,
+                np.float64,
+            )
+            print(diagnostic_msg)
+            for val_split in np.unique(folds):
+                stats1 = fast.training_statistics(val_split)
+                if Y is not None:
+                    _, stats2 = fast.training_XTX_XTY(val_split)
+                    self.check_equivalent_stats(
+                        stats1,
+                        stats2,
+                        err_msg="Statistics from training_statistics and "
+                        "training_XTX_XTY methods are not equivalent." + diagnostic_msg,
+                    )
+                    _, stats3 = fast.training_XTY(val_split)
+                    self.check_equivalent_stats(
+                        stats1,
+                        stats3,
+                        err_msg="Statistics from training_statistics and "
+                        "training_XTY methods are not equivalent." + diagnostic_msg,
+                    )
+                _, stats4 = fast.training_XTX(val_split)
+                self.check_equivalent_stats(
+                    stats1,
+                    stats4,
+                    err_msg="Statistics from training_statistics and "
+                    "training_XTX methods are not equivalent." + diagnostic_msg,
+                )
