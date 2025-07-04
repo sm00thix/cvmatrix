@@ -11,7 +11,7 @@ E-mail: ole.e@di.ku.dk
 """
 
 from collections.abc import Hashable
-from typing import Iterable, Union
+from typing import Iterable, Tuple, Union
 
 import numpy as np
 from numpy import typing as npt
@@ -170,12 +170,20 @@ class NaiveCVMatrix(CVMatrix):
                 np.sum(weights * (mat - mean_row) ** 2, axis=0, keepdims=True)
                 / (scale_factor)
             )
-        std[np.abs(std) <= self.eps] = 1
+        std[np.abs(std) <= self.resolution] = 1
         return std
 
     def _training_matrices(
         self, return_XTX: bool, return_XTY: bool, fold: Hashable
-    ) -> Union[np.ndarray, tuple[np.ndarray, np.ndarray]]:
+    ) -> Tuple[
+        Union[np.ndarray, tuple[np.ndarray, np.ndarray]],
+        Tuple[
+            Union[np.ndarray, None],
+            Union[np.ndarray, None],
+            Union[np.ndarray, None],
+            Union[np.ndarray, None],
+        ],
+    ]:
         if not return_XTX and not return_XTY:
             raise ValueError(
                 "At least one of `return_XTX` and `return_XTY` must be True."
@@ -206,13 +214,17 @@ class NaiveCVMatrix(CVMatrix):
             w_train = None
             squeezed_w_train = None
 
+        orig_X_train_mean = X_train_std = orig_Y_train_mean = Y_train_std = None
+
         if self.center_X or self.scale_X:
-            X_train_mean = np.average(
+            orig_X_train_mean = np.average(
                 X_train, axis=0, weights=squeezed_w_train, keepdims=True
             )
             if self.center_X:
-                X_train = X_train - X_train_mean
+                X_train = X_train - orig_X_train_mean
                 X_train_mean = 0
+            else:
+                X_train_mean = orig_X_train_mean
 
         if (w_train is not None) and (self.scale_X or (return_XTY and self.scale_Y)):
             scale_factor = self._compute_std_divisor(
@@ -233,12 +245,14 @@ class NaiveCVMatrix(CVMatrix):
         if return_XTY:
             Y_train = self.Y_total[training_indices]
             if self.center_Y or self.scale_Y:
-                Y_train_mean = np.average(
+                orig_Y_train_mean = np.average(
                     Y_train, axis=0, weights=squeezed_w_train, keepdims=True
                 )
                 if self.center_Y:
-                    Y_train = Y_train - Y_train_mean
+                    Y_train = Y_train - orig_Y_train_mean
                     Y_train_mean = 0
+                else:
+                    Y_train_mean = orig_Y_train_mean
 
             if self.scale_Y:
                 Y_train_std = self._compute_training_mat_std(
@@ -262,8 +276,15 @@ class NaiveCVMatrix(CVMatrix):
         else:
             X_train_T_W = X_train.T
 
+        stats_tuple = (
+            orig_X_train_mean,
+            X_train_std if self.scale_X else None,
+            orig_Y_train_mean if return_XTY else None,
+            Y_train_std if (return_XTY and self.scale_Y) else None,
+        )
+
         if return_XTX and return_XTY:
-            return X_train_T_W @ X_train, X_train_T_W @ Y_train
+            return (X_train_T_W @ X_train, X_train_T_W @ Y_train), stats_tuple
         if return_XTX:
-            return X_train_T_W @ X_train
-        return X_train_T_W @ Y_train
+            return X_train_T_W @ X_train, stats_tuple
+        return X_train_T_W @ Y_train, stats_tuple
