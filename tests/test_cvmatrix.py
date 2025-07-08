@@ -1139,3 +1139,46 @@ class TestClass:
                     err_msg="Statistics from training_statistics and "
                     "training_XTX methods are not equivalent." + diagnostic_msg,
                 )
+
+    def test_loocv(self):
+        """
+        Tests if the matrices computed by the NaiveCVMatrix and CVMatrix models are
+        equivalent when using Leave-One-Out Cross-Validation (LOOCV).
+        """
+        X = self.load_X()[:, :5]
+        Ys = [None, self.load_Y(["Protein", "Moisture"])]
+        folds = np.arange(X.shape[0])
+        center_Xs = [False, True]
+        center_Ys = [False, True]
+        scale_Xs = [False, True]
+        scale_Ys = [False, True]
+        ddofs = [0, 1]
+        use_weights = [False, True]
+        for center_X, center_Y, scale_X, scale_Y, use_w, ddof, Y in product(
+            center_Xs, center_Ys, scale_Xs, scale_Ys, use_weights, ddofs, Ys
+        ):
+            diagnostic_msg = (
+                f"center_X: {center_X}, center_Y: {center_Y}, "
+                f"scale_X: {scale_X}, scale_Y: {scale_Y}, "
+                f"ddof: {ddof}, use_weights: {use_w}, use_Y: {Y is not None}"
+            )
+            if use_w:
+                weights = self.randomly_zero_weights(self.load_weights(random=True))
+            else:
+                weights = None
+            naive, fast = self.fit_models(
+                X,
+                Y,
+                weights,
+                folds,
+                center_X,
+                center_Y,
+                scale_X,
+                scale_Y,
+                ddof,
+                np.float64,
+            )
+            print(diagnostic_msg)
+            # Extract 20 unique folds from the folds array.
+            subset_folds = np.random.choice(np.unique(folds), size=20, replace=False)
+            self.check_equivalent_matrices(naive, fast, subset_folds)

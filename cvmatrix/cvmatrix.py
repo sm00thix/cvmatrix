@@ -27,7 +27,8 @@ class CVMatrix:
     ----------
     folds : Iterable of Hashable with N elements
         An iterable defining cross-validation splits. Each unique value in
-        `folds` corresponds to a different fold.
+        `folds` corresponds to a different fold. The validation indices for each fold
+        can be accessed using the `get_validation_indices` method.
 
     center_X : bool, optional, default=True
         Whether to center `X` before computation of
@@ -348,7 +349,7 @@ class CVMatrix:
             If `fold` was not provided as a cross-validation split in the
             `folds` parameter of the constructor.
         """
-        val_indices = self._get_val_indices(fold)
+        val_indices = self.get_validation_indices(fold)
         X_val, X_val_unweighted, Y_val, Y_val_unweighted = self._get_val_matrices(
             val_indices=val_indices, return_XTY=self.Y_total is not None
         )
@@ -365,6 +366,32 @@ class CVMatrix:
         )[
             :-1
         ]  # Exclude the sum of training weights from the return tuple
+
+    def get_validation_indices(self, fold: Hashable) -> npt.NDArray[np.int_]:
+        """
+        Returns the indices of the validation set samples for a given fold.
+
+        Parameters
+        ----------
+        fold : Hashable
+            The fold for which to return the validation set indices.
+
+        Returns
+        -------
+        Array of shape (N_val,)
+            The indices of the validation set samples for the given fold.
+
+        Raises
+        ------
+        ValueError
+            If `fold` was not provided as a cross-validation split in the
+            `folds` parameter of the constructor.
+        """
+        try:
+            val_indices = self.folds_dict[fold]
+        except KeyError as e:
+            raise ValueError(f"Fold {fold} not found.") from e
+        return val_indices
 
     def _get_sum_w_train_and_num_nonzero_w_train(
         self, val_indices: npt.NDArray[np.int_]
@@ -589,7 +616,7 @@ class CVMatrix:
             )
         if return_XTY and self.Y_total is None:
             raise ValueError("Response variables `Y` are not provided.")
-        val_indices = self._get_val_indices(fold)
+        val_indices = self.get_validation_indices(fold)
         X_val, X_val_unweighted, Y_val, Y_val_unweighted = self._get_val_matrices(
             val_indices=val_indices, return_XTY=return_XTY
         )
@@ -679,24 +706,6 @@ class CVMatrix:
             ),
             stats_tuple,
         )
-
-    def _get_val_indices(self, fold: Hashable) -> npt.NDArray[np.int_]:
-        """
-        Returns the indices of the validation set samples for a given fold.
-        Parameters
-        ----------
-        fold : Hashable
-            The fold for which to return the validation set indices.
-        Returns
-        -------
-        Array of shape (N_val,)
-            The indices of the validation set samples for the given fold.
-        """
-        try:
-            val_indices = self.folds_dict[fold]
-        except KeyError as e:
-            raise ValueError(f"Fold {fold} not found.") from e
-        return val_indices
 
     def _get_val_matrices(
         self, val_indices: npt.NDArray[np.int_], return_XTY: bool
