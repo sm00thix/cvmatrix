@@ -1,17 +1,16 @@
 """
 Contains the CVMatrix class which implements methods for fast computation of training
 set kernel matrices in cross-validation using the fast algorithms described in the
-paper by O.-C. G. Engstrøm: https://arxiv.org/abs/2401.13185
+paper by O.-C. G. Engstrøm and M. H. Jensen:
+https://analyticalsciencejournals.onlinelibrary.wiley.com/doi/full/10.1002/cem.70008
 
 The implementation is written using NumPy.
 
 Author: Ole-Christian Galbo Engstrøm
-E-mail: ole.e@di.ku.dk
+E-mail: ocge@foss.dk
 """
 
-from collections import defaultdict
-from collections.abc import Hashable
-from typing import Iterable, Tuple, Union
+from typing import Tuple, Union
 
 import numpy as np
 from numpy import typing as npt
@@ -20,16 +19,15 @@ from numpy import typing as npt
 class CVMatrix:
     """
     Implements the fast cross-validation algorithms for kernel matrix-based models such
-    as PCA, PCR, PLS, and OLS. The algorithms are based on the paper by O.-C. G.
-    Engstrøm: https://arxiv.org/abs/2401.13185
+    as PCA, PCR, PLS, and OLS. The algorithms are based on Algorithms 2-7 and all the
+    extensions in Table 1 in the paper by O.-C. G. Engstrøm and M. H. Jensen:
+    https://analyticalsciencejournals.onlinelibrary.wiley.com/doi/full/10.1002/cem.70008.
+    This class is designed to be used in conjunction with
+    cvmatrix.validation_partitioner.Partitioner which implements Algorithm 1
+    from the same paper.
 
     Parameters
     ----------
-    folds : Iterable of Hashable with N elements
-        An iterable defining cross-validation splits. Each unique value in
-        `folds` corresponds to a different fold. The validation indices for each fold
-        can be accessed using the `get_validation_indices` method.
-
     center_X : bool, optional, default=True
         Whether to center `X` before computation of
         :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` and
@@ -74,11 +72,73 @@ class CVMatrix:
         input arrays are not NumPy arrays of type `dtype`, then a copy is made. If
         `True` a copy is always made. If no copy is made, then external modifications
         to `X` or `Y` will result in undefined behavior.
+
+    Attributes
+    ----------
+    X : np.ndarray
+        The total predictor matrix `X` for the entire dataset.
+
+    Y : np.ndarray or None
+        The total response matrix `Y` for the entire dataset. If `Y` is `None`, this is
+        `None`.
+
+    N : int
+        The number of samples in the dataset.
+
+    K : int
+        The number of predictor variables in `X`.
+
+    M : int or None
+        The number of response variables in `Y`. If `Y` is `None`, this is `None`.
+
+    XTX : np.ndarray
+        The total matrix :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` for the
+        entire dataset.
+
+    XTY : np.ndarray or None
+        The total matrix :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}` for the
+        entire dataset. This is computed only if `Y` is not `None`.
+
+    sum_X : np.ndarray or None
+        The row of column-wise weighted means for `X` for the entire dataset. This is
+        computed only if `center_X`, `scale_X`, or `center_Y` is `True`.
+
+    sum_Y : np.ndarray or None
+        The row of column-wise weighted means for `Y` for the entire dataset. This is
+        computed only if `center_Y`, `scale_Y`, or `center_X` is `True` and `Y` is not
+        `None`.
+
+    sum_sq_X : np.ndarray or None
+        The row of column-wise weighted standard deviations for `X` for the entire
+        dataset. This is computed only if `scale_X` is `True`.
+
+    sum_sq_Y : np.ndarray or None
+        The row of column-wise weighted standard deviations for `Y` for the entire
+        dataset. This is computed only if `scale_Y` is `True` and `Y` is not `None`.
+
+    Xw : np.ndarray or None
+        The total weighted predictor matrix `X` for the entire dataset. This is
+        :math:`\mathbf{X}\mathbf{W}`.
+
+    Yw : np.ndarray or None
+        The total weighted response matrix `Y` for the entire dataset. This is
+        :math:`\mathbf{Y}\mathbf{W}`. This is computed only if `Y` is not `None`.
+
+    weights : np.ndarray or None
+        The total weights for the entire dataset. This is an array of shape (N, 1). If
+        `weights` is `None`, this is `None`.
+
+    sum_w : float or None
+        The sum of the weights for the entire dataset. If `weights` is `None`, this is
+        `None`.
+
+    num_nonzero_w : int or None
+        The number of non-zero weights for the entire dataset. If `weights` is `None`,
+        this is `None`.
     """
 
     def __init__(
         self,
-        folds: Iterable[Hashable],
         center_X: bool = True,
         center_Y: bool = True,
         scale_X: bool = True,
@@ -95,24 +155,22 @@ class CVMatrix:
         self.dtype = dtype
         self.copy = copy
         self.resolution = np.finfo(dtype).resolution * 10
-        self.X_total = None
-        self.Y_total = None
+        self.X = None
+        self.Y = None
         self.N = None
         self.K = None
         self.M = None
-        self.XTX_total = None
-        self.XTY_total = None
-        self.sum_X_total = None
-        self.sum_Y_total = None
-        self.sum_sq_X_total = None
-        self.sum_sq_Y_total = None
-        self.Xw_total = None
-        self.Yw_total = None
-        self.w_total = None
-        self.sum_w_total = None
-        self.num_nonzero_w_total = None
-        self.folds_dict = None
-        self._init_folds_dict(folds)
+        self.XTX = None
+        self.XTY = None
+        self.sum_X = None
+        self.sum_Y = None
+        self.sum_sq_X = None
+        self.sum_sq_Y = None
+        self.Xw = None
+        self.Yw = None
+        self.weights = None
+        self.sum_w = None
+        self.num_nonzero_w = None
 
     def fit(
         self,
@@ -148,24 +206,27 @@ class CVMatrix:
         self._init_mats(X, Y, weights)
         self._init_weighted_mats()
         self._init_matrix_products()
-        self._init_total_stats()
+        self._init_stats()
 
     def training_XTX(
-        self, fold: Hashable
+        self, validation_indices: npt.NDArray[np.int_]
     ) -> Tuple[
         np.ndarray, Tuple[Union[None, np.ndarray], Union[None, np.ndarray], None, None]
     ]:
         """
         Computes the training set :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`
-        corresponding to every sample except those belonging to the given fold. Also
+        corresponding to every sample except those at the `validation_indices`. Also
         computes the row of column-wise weighted means for `X` and the row of
         column-wise weighted standard deviations for `X`.
 
         Parameters
         ----------
-        fold : Hashable
-            The fold for which to return the corresponding training set
-            :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`.
+        validation_indices : npt.NDArray[np.int_]
+            An integer array of indices for the validation set for which to
+            return the corresponding training set
+            :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`. The validation indices
+            should be obtained using the `get_validation_indices` method of a
+            cvmatrix.validation_partitioner.Partitioner object.
 
         Returns
         -------
@@ -180,8 +241,16 @@ class CVMatrix:
         Raises
         ------
         ValueError
-            If `fold` was not provided as a cross-validation split in the
-            `folds` parameter of the constructor.
+            - If `Y` is `None`.
+            - If `self.center_X`, `self.center_Y`, `self.scale_X`, or `self.scale_Y` is
+                `True` and the corresponding weighted means and standard deviations
+                cannot be computed due to the training set having no non-zero
+                weights.
+            - If `self.scale_X` or `self.scale_Y` is `True` and the corresponding
+                weighted standard deviations cannot be computed due `self.ddof` being
+                greater or equal to the number of non-zero weights in the training
+                set.
+
 
         See Also
         --------
@@ -193,12 +262,12 @@ class CVMatrix:
             Computes the training set
             :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`,
             :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`, and weighted
-            statistics for a given fold. This method is faster than calling
+            statistics. This method is faster than calling
             `training_XTX` and `training_XTY` separately.
         """
-        return self._training_matrices(True, False, fold)
+        return self._training_matrices(True, False, validation_indices)
 
-    def training_XTY(self, fold: Hashable) -> Tuple[
+    def training_XTY(self, validation_indices: npt.NDArray[np.int_]) -> Tuple[
         np.ndarray,
         Tuple[
             Union[None, np.ndarray],
@@ -209,7 +278,7 @@ class CVMatrix:
     ]:
         """
         Computes the training set :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`
-        corresponding to every sample except those belonging to the given fold. Also
+        corresponding to every sample except those at the `validation_indices`. Also
         computes the row of column-wise weighted means for `X`, the row of column-wise
         weighted standard deviations for `X`, the row of column-wise weighted means for
         `Y`, and the row of column-wise weighted standard deviations for `Y`. If a
@@ -217,9 +286,12 @@ class CVMatrix:
 
         Parameters
         ----------
-        fold : Hashable
-            The fold for which to return the corresponding training set
-            :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`.
+        validation_indices : npt.NDArray[np.int_]
+            An integer array of indices for the validation set for which to
+            return the corresponding training set
+            :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`. The validation indices
+            should be obtained using the `get_validation_indices` method of a
+            cvmatrix.validation_partitioner.Partitioner object.
 
         Returns
         -------
@@ -234,28 +306,32 @@ class CVMatrix:
         Raises
         ------
         ValueError
-            If `Y` is `None`.
-
-        ValueError
-            If `fold` was not provided as a cross-validation split in the
-            `folds` parameter of the constructor.
+            - If `Y` is `None`.
+            - If `self.center_X`, `self.center_Y`, `self.scale_X`, or `self.scale_Y` is
+                `True` and the corresponding weighted means and standard deviations
+                cannot be computed due to the training set having no non-zero
+                weights.
+            - If `self.scale_X` or `self.scale_Y` is `True` and the corresponding
+                weighted standard deviations cannot be computed due `self.ddof` being
+                greater or equal to the number of non-zero weights in the training
+                set.
 
         See Also
         --------
         training_XTX :
             Computes the training set
-            :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` and weighted statistics
-            for a given fold.
+            :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` and weighted
+            statistics.
         training_XTX_XTY :
             Computes the training set
             :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`,
             :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`, and weighted
-            statistics for a given fold. This method is faster than calling
-            `training_XTX` and `training_XTY` separately.
+            statistics. This method is faster than calling `training_XTX` and
+            `training_XTY` separately.
         """
-        return self._training_matrices(False, True, fold)
+        return self._training_matrices(False, True, validation_indices)
 
-    def training_XTX_XTY(self, fold: Hashable) -> Tuple[
+    def training_XTX_XTY(self, validation_indices: npt.NDArray[np.int_]) -> Tuple[
         Tuple[np.ndarray, np.ndarray],
         Tuple[
             Union[None, np.ndarray],
@@ -267,7 +343,7 @@ class CVMatrix:
         """
         Computes the training set :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`
         and :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}` corresponding to every
-        sample except those belonging to the given fold. Also computes the row of
+        sample except those at the `validation_indices`. Also computes the row of
         column-wise weighted means for `X`, the row of column-wise weighted standard
         deviations for `X`, the row of column-wise weighted means for `Y`, and the row
         of column-wise weighted standard deviations for `Y`. If a statistic is not
@@ -276,10 +352,13 @@ class CVMatrix:
 
         Parameters
         ----------
-        fold : Hashable
-            The fold for which to return the corresponding training set
+        validation_indices : npt.NDArray[np.int_]
+            An integer array of indices for the validation set for which to
+            return the corresponding training set
             :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` and
-            :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`.
+            :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`. The validation indices
+            should be obtained using the `get_validation_indices` method of a
+            cvmatrix.validation_partitioner.Partitioner object.
 
         Returns
         -------
@@ -295,11 +374,15 @@ class CVMatrix:
         Raises
         ------
         ValueError
-            If `Y` is `None`.
-
-        ValueError
-            If `fold` was not provided as a cross-validation split in the
-            `folds` parameter of the constructor.
+            - If `Y` is `None`.
+            - If `self.center_X`, `self.center_Y`, `self.scale_X`, or `self.scale_Y` is
+                `True` and the corresponding weighted means and standard deviations
+                cannot be computed due to the training set having no non-zero
+                weights.
+            - If `self.scale_X` or `self.scale_Y` is `True` and the corresponding
+                weighted standard deviations cannot be computed due `self.ddof` being
+                greater or equal to the number of non-zero weights in the training
+                set.
 
         See Also
         --------
@@ -312,9 +395,9 @@ class CVMatrix:
             :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}` and weighted
             statistics.
         """
-        return self._training_matrices(True, True, fold)
+        return self._training_matrices(True, True, validation_indices)
 
-    def training_statistics(self, fold: Hashable) -> Tuple[
+    def training_statistics(self, validation_indices: npt.NDArray[np.int_]) -> Tuple[
         Union[None, np.ndarray],
         Union[None, np.ndarray],
         Union[None, np.ndarray],
@@ -322,8 +405,8 @@ class CVMatrix:
     ]:
         """
         Computes the row of column-wise weighted means and standard deviations for `X`
-        and `Y` corresponding to every sample except those belonging to the given fold.
-        The statistics that can be computed depend on the arguments provided in the
+        and `Y` corresponding to every sample except those at `validation_indices`. The
+        statistics that can be computed depend on the arguments provided in the
         constructor: `X` mean can be computed if `center_X` or `scale_X`, or `center_Y`
         is `True`. `X` standard deviation can be computed if `scale_X` is True. `Y`
         mean can be computed if `center_X ,`center_Y` or `scale_Y` is `True`, and `Y`
@@ -346,60 +429,40 @@ class CVMatrix:
         Raises
         ------
         ValueError
-            If `fold` was not provided as a cross-validation split in the
-            `folds` parameter of the constructor.
+            - If `self.center_X`, `self.center_Y`, `self.scale_X`, or `self.scale_Y` is
+                `True` and the corresponding weighted means and standard deviations
+                cannot be computed due to the training set having no non-zero
+                weights.
+            - If `self.scale_X` or `self.scale_Y` is `True` and the corresponding
+                weighted standard deviations cannot be computed due `self.ddof` being
+                greater or equal to the number of non-zero weights in the training
+                set.
+
         """
-        val_indices = self.get_validation_indices(fold)
         X_val, X_val_unweighted, Y_val, Y_val_unweighted = self._get_val_matrices(
-            val_indices=val_indices, return_XTY=self.Y_total is not None
+            val_indices=validation_indices, return_XTY=self.Y is not None
         )
         return self._compute_training_stats(
-            val_indices=val_indices,
+            val_indices=validation_indices,
             X_val=X_val,
             X_val_unweighted=X_val_unweighted,
             Y_val=Y_val,
             Y_val_unweighted=Y_val_unweighted,
             return_X_mean=self.center_X or self.scale_X,
             return_X_std=self.scale_X,
-            return_Y_mean=(self.center_Y or self.scale_Y) and self.Y_total is not None,
-            return_Y_std=self.scale_Y and self.Y_total is not None,
+            return_Y_mean=(self.center_Y or self.scale_Y) and self.Y is not None,
+            return_Y_std=self.scale_Y and self.Y is not None,
         )[
             :-1
         ]  # Exclude the sum of training weights from the return tuple
-
-    def get_validation_indices(self, fold: Hashable) -> npt.NDArray[np.int_]:
-        """
-        Returns the indices of the validation set samples for a given fold.
-
-        Parameters
-        ----------
-        fold : Hashable
-            The fold for which to return the validation set indices.
-
-        Returns
-        -------
-        Array of shape (N_val,)
-            The indices of the validation set samples for the given fold.
-
-        Raises
-        ------
-        ValueError
-            If `fold` was not provided as a cross-validation split in the
-            `folds` parameter of the constructor.
-        """
-        try:
-            val_indices = self.folds_dict[fold]
-        except KeyError as e:
-            raise ValueError(f"Fold {fold} not found.") from e
-        return val_indices
 
     def _get_sum_w_train_and_num_nonzero_w_train(
         self, val_indices: npt.NDArray[np.int_]
     ) -> Tuple[float, float]:
         """
         Returns a tuple containing the sum of weights in the training set and the number
-        of non-zero weights in the training set. If `w_total` is `None`, it returns the
-        size of the training set as both the sum of weights and the number of
+        of non-zero weights in the training set. If `self.weights` is `None`, it returns
+        the size of the training set as both the sum of weights and the number of
         non-zero weights.
 
         Returns
@@ -415,16 +478,16 @@ class CVMatrix:
             make it impossible to compute either of training set means or standard
             deviations.
         """
-        if self.w_total is None:
+        if self.weights is None:
             sum_w_val = np.asarray(val_indices.size, dtype=self.dtype)
-            sum_w_train = self.sum_w_total - sum_w_val
+            sum_w_train = self.sum_w - sum_w_val
             return (sum_w_train, sum_w_train)
-        w_val = self.w_total[val_indices]
+        w_val = self.weights[val_indices]
         sum_w_val = np.sum(w_val)
-        sum_w_train = self.sum_w_total - sum_w_val
+        sum_w_train = self.sum_w - sum_w_val
         num_nonzero_w_val = np.count_nonzero(w_val)
         num_nonzero_w_train = np.asarray(
-            self.num_nonzero_w_total - num_nonzero_w_val, dtype=self.dtype
+            self.num_nonzero_w - num_nonzero_w_val, dtype=self.dtype
         )
         if num_nonzero_w_train == 0:
             raise ValueError(
@@ -452,13 +515,16 @@ class CVMatrix:
         Union[None, float],
     ]:
         """
-        Computes the training set statistics for the given fold. The statistics include
-        the row of column-wise weighted means and standard deviations for `X` and `Y`.
+        Computes the training set statistics. The training set corresponds
+        to every sample except those at the `validation_indices`. The statistics
+        include the row of column-wise weighted means and standard deviations for `X`
+        and `Y`.
 
         Parameters
         ----------
         val_indices : Array of shape (N_val,)
-            The indices of the validation set samples for the given fold.
+            The indices of the validation set samples for which to compute
+            statistics on the corresponding training set.
 
         X_val : None or Array of shape (N_val, K)
             The validation set of weighted predictor variables. If `None`, no
@@ -515,14 +581,14 @@ class CVMatrix:
             sum_X_val = np.sum(X_val, axis=0, keepdims=True)
             X_train_mean = self._compute_training_mat_mean(
                 sum_X_val,
-                self.sum_X_total,
+                self.sum_X,
                 sum_w_train,
             )
         if return_Y_mean or return_Y_std:
             sum_Y_val = np.sum(Y_val, axis=0, keepdims=True)
             Y_train_mean = self._compute_training_mat_mean(
                 sum_Y_val,
-                self.sum_Y_total,
+                self.sum_Y,
                 sum_w_train,
             )
         if return_X_std or return_Y_std:
@@ -533,8 +599,8 @@ class CVMatrix:
                 X_val,
                 X_val_unweighted,
                 X_train_mean,
-                self.sum_X_total,
-                self.sum_sq_X_total,
+                self.sum_X,
+                self.sum_sq_X,
                 sum_w_train,
                 divisor,
             )
@@ -544,8 +610,8 @@ class CVMatrix:
                 Y_val,
                 Y_val_unweighted,
                 Y_train_mean,
-                self.sum_Y_total,
-                self.sum_sq_Y_total,
+                self.sum_Y,
+                self.sum_sq_Y,
                 sum_w_train,
                 divisor,
             )
@@ -558,7 +624,7 @@ class CVMatrix:
         )
 
     def _training_matrices(
-        self, return_XTX: bool, return_XTY: bool, fold: Hashable
+        self, return_XTX: bool, return_XTY: bool, val_indices: npt.NDArray[np.int_]
     ) -> Tuple[
         Union[np.ndarray, Tuple[np.ndarray, np.ndarray]],
         Tuple[
@@ -570,8 +636,8 @@ class CVMatrix:
     ]:
         """
         Returns the training set :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`
-        and/or :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}` corresponding to
-        every sample except those belonging to the given fold.
+        and/or :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}` The training
+        set corresponds to every sample except those at the `validation_indices`.
 
         Parameters
         ----------
@@ -579,14 +645,17 @@ class CVMatrix:
             Whether to return the training set
             :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`.
 
-        fold : Hashable
-            The fold for which to return the corresponding training set
-            :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` and
-            :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`
-
         return_XTY : bool, optional, default=False
             Whether to return the training set
             :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`.
+
+        validation_indices : npt.NDArray[np.int_]
+            An integer array of indices for the validation set for which to
+            return the corresponding training set
+            :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` and
+            :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`. The validation indices
+            should be obtained using the `get_validation_indices` method of a
+            cvmatrix.validation_partitioner.Partitioner object.
 
         Returns
         -------
@@ -605,18 +674,13 @@ class CVMatrix:
         ValueError
             If both `return_XTX` and `return_XTY` are `False` or if `return_XTY` is
             `True` and `Y` is `None`.
-
-        ValueError
-            If `fold` was not provided as a cross-validation split in the
-            `folds` parameter of the constructor.
         """
         if not return_XTX and not return_XTY:
             raise ValueError(
                 "At least one of `return_XTX` and `return_XTY` must be True."
             )
-        if return_XTY and self.Y_total is None:
+        if return_XTY and self.Y is None:
             raise ValueError("Response variables `Y` are not provided.")
-        val_indices = self.get_validation_indices(fold)
         X_val, X_val_unweighted, Y_val, Y_val_unweighted = self._get_val_matrices(
             val_indices=val_indices, return_XTY=return_XTY
         )
@@ -653,7 +717,7 @@ class CVMatrix:
             return (
                 (
                     self._training_kernel_matrix(
-                        self.XTX_total,
+                        self.XTX,
                         X_val,
                         X_val_unweighted,
                         X_train_mean,
@@ -664,7 +728,7 @@ class CVMatrix:
                         center=self.center_X,
                     ),
                     self._training_kernel_matrix(
-                        self.XTY_total,
+                        self.XTY,
                         X_val,
                         Y_val_unweighted,
                         X_train_mean,
@@ -680,7 +744,7 @@ class CVMatrix:
         if return_XTX:
             return (
                 self._training_kernel_matrix(
-                    self.XTX_total,
+                    self.XTX,
                     X_val,
                     X_val_unweighted,
                     X_train_mean,
@@ -694,7 +758,7 @@ class CVMatrix:
             )
         return (
             self._training_kernel_matrix(
-                self.XTY_total,
+                self.XTY,
                 X_val,
                 Y_val_unweighted,
                 X_train_mean,
@@ -734,20 +798,20 @@ class CVMatrix:
             variables `Y_unweighted`. If `return_XTY` is `False`, `Y` and
             `Y_unweighted` will be `None`.
         """
-        X_val = self.Xw_total[val_indices]
-        if self.w_total is None:
+        X_val = self.Xw[val_indices]
+        if self.weights is None:
             X_val_unweighted = X_val
         else:
-            X_val_unweighted = self.X_total[val_indices]
+            X_val_unweighted = self.X[val_indices]
         if return_XTY:
-            if self.w_total is None or not (
+            if self.weights is None or not (
                 self.center_X or self.center_Y or self.scale_Y
             ):
-                Y_val = self.Y_total[val_indices]
+                Y_val = self.Y[val_indices]
                 Y_val_unweighted = Y_val
             else:
-                Y_val = self.Yw_total[val_indices]
-                Y_val_unweighted = self.Y_total[val_indices]
+                Y_val = self.Yw[val_indices]
+                Y_val_unweighted = self.Y[val_indices]
         else:
             Y_val = None
             Y_val_unweighted = None
@@ -825,7 +889,7 @@ class CVMatrix:
     def _compute_training_mat_mean(
         self,
         sum_mat_val: np.ndarray,
-        sum_mat_total: np.ndarray,
+        sum_mat: np.ndarray,
         sum_w_train: float,
     ) -> np.ndarray:
         """
@@ -836,7 +900,7 @@ class CVMatrix:
         sum_mat_val : Array of shape (1, K) or (1, M)
             The row of column-wise sums of validation set of `Xw` or `Yw`.
 
-        sum_mat_total : Array of shape (1, K) or (1, M)
+        sum_mat : Array of shape (1, K) or (1, M)
             The row of column-wise sums of the total `Xw` or `Yw`.
 
         sum_w_train : float
@@ -847,7 +911,7 @@ class CVMatrix:
         Array of shape (1, K) or (1, M)
             The row of column-wise means of the training set matrix.
         """
-        return (sum_mat_total - sum_mat_val) / sum_w_train
+        return (sum_mat - sum_mat_val) / sum_w_train
 
     def _compute_std_divisor(
         self, sum_w_train: float, num_nonzero_w_train: int
@@ -882,8 +946,8 @@ class CVMatrix:
         mat_val: np.ndarray,
         mat_val_unweighted: np.ndarray,
         mat_train_mean: np.ndarray,
-        sum_mat_total: np.ndarray,
-        sum_sq_mat_total: np.ndarray,
+        sum_mat: np.ndarray,
+        sum_sq_mat: np.ndarray,
         sum_w_train: float,
         divisor: float,
     ) -> np.ndarray:
@@ -905,10 +969,10 @@ class CVMatrix:
         mat_train_mean : Array of shape (1, K) or (1, M)
             The row of column-wise weighted means of the training matrix.
 
-        sum_mat_total : Array of shape (1, K) or (1, M)
+        sum_mat : Array of shape (1, K) or (1, M)
             The row of column-wise sums of the total weighted matrix.
 
-        sum_sq_mat_total : Array of shape (1, K) or (1, M)
+        sum_sq_mat : Array of shape (1, K) or (1, M)
             The row of column-wise sums of products between the total weighted matrix
             and the total unweighted matrix.
 
@@ -924,8 +988,8 @@ class CVMatrix:
         Array of shape (1, K) or (1, M)
             The row of column-wise standard deviations of the training set matrix.
         """
-        train_sum_mat = sum_mat_total - sum_mat_val
-        train_sum_sq_mat = sum_sq_mat_total - np.sum(
+        train_sum_mat = sum_mat - sum_mat_val
+        train_sum_sq_mat = sum_sq_mat - np.sum(
             mat_val * mat_val_unweighted, axis=0, keepdims=True
         )
         mat_train_var = (
@@ -967,9 +1031,9 @@ class CVMatrix:
         weights: Union[None, npt.ArrayLike],
     ) -> None:
         """
-        Initializes the matrices `X_total`, `Y_total`, and `w_total` with the provided
-        data. If `Y` is `None`, then `Y_total` is not initialized. If `weights` is
-        provided, it initializes the weighted matrices `Xw_total` and `Yw_total`.
+        Initializes the matrices `X`, `Y`, and `weights` with the provided
+        data. If `Y` is `None`, then `Y` is not initialized. If `weights` is
+        provided, it initializes the weighted matrices `Xw` and `Yw`.
 
         Parameters
         ----------
@@ -984,97 +1048,68 @@ class CVMatrix:
             Weights for each sample in `X` and `Y`. If `None`, no weights are used in
             the computations.
         """
-        self.X_total = self._init_mat(X)
-        self.N, self.K = self.X_total.shape
+        self.X = self._init_mat(X)
+        self.N, self.K = self.X.shape
         if Y is not None:
-            self.Y_total = self._init_mat(Y)
-            self.M = self.Y_total.shape[1]
+            self.Y = self._init_mat(Y)
+            self.M = self.Y.shape[1]
         else:
-            self.Y_total = None
+            self.Y = None
             self.M = None
 
         if weights is not None:
-            self.w_total = self._init_mat(weights)
-            if np.any(self.w_total < 0):
+            self.weights = self._init_mat(weights)
+            if np.any(self.weights < 0):
                 raise ValueError("Weights must be non-negative.")
         else:
-            self.w_total = None
+            self.weights = None
 
     def _init_weighted_mats(self):
         """
-        Initializes the weighted matrices `Xw_total` and `Yw_total` if weights are
+        Initializes the weighted matrices `Xw` and `Yw` if weights are
         provided. These matrices are computed as the product of the original matrices
-        `X_total` and `Y_total` with the weights `w_total`. If `Y_total` is `None`, then
-        `Yw_total` is not initialized.
-        If `w_total` is `None`, then this method does nothing.
+        `X` and `Y` with the `weights`. If `Y` is `None`, then `Yw` is not initialized.
+        If `w` is `None`, then this method does nothing.
         """
-        if self.w_total is None:
-            self.Xw_total = self.X_total
-            if self.Y_total is not None:
-                self.Yw_total = self.Y_total
+        if self.weights is None:
+            self.Xw = self.X
+            if self.Y is not None:
+                self.Yw = self.Y
         else:
-            self.Xw_total = self.X_total * self.w_total
-            if self.Y_total is not None and (
-                self.center_X or self.center_Y or self.scale_Y
-            ):
-                self.Yw_total = self.Y_total * self.w_total
+            self.Xw = self.X * self.weights
+            if self.Y is not None and (self.center_X or self.center_Y or self.scale_Y):
+                self.Yw = self.Y * self.weights
 
     def _init_matrix_products(self) -> None:
         """
-        Initializes the global matrix products `XTX_total` and `XTY_total` for the
+        Initializes the global matrix products `XTX` and `XTY` for the
         entire dataset. These are :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`
         and :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`, respectively.
         """
-        self.XTX_total = self.Xw_total.T @ self.X_total
-        if self.Y_total is not None:
-            self.XTY_total = self.Xw_total.T @ self.Y_total
+        self.XTX = self.Xw.T @ self.X
+        if self.Y is not None:
+            self.XTY = self.Xw.T @ self.Y
 
-    def _init_total_stats(self) -> None:
+    def _init_stats(self) -> None:
         """
         Initializes the global statistics for `X` and `Y`.
         """
         if self.center_X or self.center_Y or self.scale_X or self.scale_Y:
-            if self.w_total is not None:
-                self.sum_w_total = np.sum(self.w_total)
-                self.num_nonzero_w_total = np.count_nonzero(self.w_total)
+            if self.weights is not None:
+                self.sum_w = np.sum(self.weights)
+                self.num_nonzero_w = np.count_nonzero(self.weights)
             else:
-                self.sum_w_total = self.N
-                self.num_nonzero_w_total = self.N
+                self.sum_w = self.N
+                self.num_nonzero_w = self.N
         if self.center_X or self.center_Y or self.scale_X:
-            self.sum_X_total = np.sum(self.Xw_total, axis=0, keepdims=True)
-        if (
-            self.center_X or self.center_Y or self.scale_Y
-        ) and self.Y_total is not None:
-            self.sum_Y_total = np.sum(self.Yw_total, axis=0, keepdims=True)
+            self.sum_X = np.sum(self.Xw, axis=0, keepdims=True)
+        if (self.center_X or self.center_Y or self.scale_Y) and self.Y is not None:
+            self.sum_Y = np.sum(self.Yw, axis=0, keepdims=True)
         if self.scale_X:
-            self.sum_sq_X_total = np.sum(
-                self.Xw_total * self.X_total, axis=0, keepdims=True
-            )
+            self.sum_sq_X = np.sum(self.Xw * self.X, axis=0, keepdims=True)
         else:
-            self.sum_sq_X_total = None
-        if self.scale_Y and self.Y_total is not None:
-            self.sum_sq_Y_total = np.sum(
-                self.Yw_total * self.Y_total, axis=0, keepdims=True
-            )
+            self.sum_sq_X = None
+        if self.scale_Y and self.Y is not None:
+            self.sum_sq_Y = np.sum(self.Yw * self.Y, axis=0, keepdims=True)
         else:
-            self.sum_sq_Y_total = None
-
-    def _init_folds_dict(self, folds: Iterable[Hashable]) -> None:
-        """
-        Generates a dictionary of indices for each fold. The dictionary is stored in
-        the `folds_dict` attribute. The dictionary is used to quickly access the
-        indices for each fold.
-
-        Parameters
-        ----------
-        folds : Iterable of Hashable with N elements
-            An iterable defining cross-validation splits. Each unique value in
-            `folds` corresponds to a different fold.
-        """
-        folds_dict: "defaultdict[Hashable, list[int]]" = defaultdict(list)
-        for i, num in enumerate(folds):
-            folds_dict[num].append(i)
-        folds_dict_nd: dict[Hashable, npt.NDArray[np.int_]] = {}
-        for key in folds_dict:
-            folds_dict_nd[key] = np.asarray(folds_dict[key], dtype=int)
-        self.folds_dict = folds_dict_nd
+            self.sum_sq_Y = None

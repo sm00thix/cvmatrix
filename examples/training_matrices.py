@@ -11,6 +11,7 @@ E-mail: ole.e@di.ku.dk
 import numpy as np
 
 from cvmatrix.cvmatrix import CVMatrix
+from cvmatrix.partitioner import Partitioner
 
 if __name__ == "__main__":
     # Create some example data. X must have shape (N, K) or (N,) and Y must have shape
@@ -32,9 +33,7 @@ if __name__ == "__main__":
     # Create a CVMatrix object with centering and scaling of X and Y. We could have
     # used any of the 16 combinations of centering and scaling. The default is to
     # center and scale both X and Y.
-    cvm = CVMatrix(
-        folds=folds, center_X=True, center_Y=True, scale_X=True, scale_Y=True
-    )
+    cvm = CVMatrix(center_X=True, center_Y=True, scale_X=True, scale_Y=True)
 
     # Fit the model to the data. This will compute total XTWX and XTWY matrices.
     # It also computes global statistics that will be reused when determining the
@@ -42,20 +41,27 @@ if __name__ == "__main__":
     # the chosen centering and scaling are computed.
     cvm.fit(X, Y, weights)
 
+    # Create a Partitioner object with the folds. This will create a dictionary of folds
+    # where the keys are the unique values in `folds` and the values are NumPy integer
+    # arrays containing the indices of the validation samples for that fold. The name
+    # of the dictionairy is `folds_dict`.
+    partitioner = Partitioner(folds)
+
     # The unique folds and associated indices are stored in the
     # folds_dict
-    print(f"Folds: {cvm.folds_dict.keys()}")
-    for fold, samples in cvm.folds_dict.items():
-        print(f"Fold {fold} samples: {samples}")
+    print(f"Folds: {partitioner.folds_dict.keys()}")
+    for fold, val_indices in partitioner.folds_dict.items():
+        print(f"Fold {fold}, validation indices: {val_indices}")
     print()
 
     # Compute the training set matrices for each fold.
     print("Training set matrices using training_XTX_XTY:")
-    for fold in cvm.folds_dict:
+    for fold in partitioner.folds_dict:
         # Notice that the samples associated with fold are considered part of the
         # validation set. The training set is then all samples not associated with this
         # fold.
-        result = cvm.training_XTX_XTY(fold)
+        val_indices = partitioner.get_validation_indices(fold)
+        result = cvm.training_XTX_XTY(val_indices)
         (XTWX, XTWY), (X_mean, X_std, Y_mean, Y_std) = result
         print(f"Fold {fold}:")
         print(f"Training XTWX:\n{XTWX}")
@@ -69,8 +75,9 @@ if __name__ == "__main__":
     # We can also get only XTWX or only XTWY. However, if both XTWX and XTWY are needed,
     # it is more efficient to call training_XTX_XTY.
     print("Training set matrices using training_XTX and training_XTY:")
-    for fold in cvm.folds_dict:
-        result = cvm.training_XTX(fold)
+    for fold in partitioner.folds_dict:
+        val_indices = partitioner.get_validation_indices(fold)
+        result = cvm.training_XTX_XTY(val_indices)
         XTWX, (X_mean, X_std, Y_mean, Y_std) = result
         print(f"Fold {fold}:")
         print(f"Training XTWX:\n{XTWX}")
@@ -81,8 +88,9 @@ if __name__ == "__main__":
         print(f"Training weighted Y mean:\n{Y_mean}")
         print(f"Training weighted Y std:\n{Y_std}")
         print()
-    for fold in cvm.folds_dict:
-        result = cvm.training_XTY(fold)
+    for fold in partitioner.folds_dict:
+        val_indices = partitioner.get_validation_indices(fold)
+        result = cvm.training_XTY(val_indices)
         XTWY, (X_mean, X_std, Y_mean, Y_std) = result
         print(f"Fold {fold}:")
         print(f"Training XTWY:\n{XTWY}")
@@ -101,8 +109,9 @@ if __name__ == "__main__":
 
     print("Fitting on new data:")
     cvm.fit(X, Y)
-    for fold in cvm.folds_dict:
-        result = cvm.training_XTX_XTY(fold)
+    for fold in partitioner.folds_dict:
+        val_indices = partitioner.get_validation_indices(fold)
+        result = cvm.training_XTX_XTY(val_indices)
         (XTWX, XTWY), (X_mean, X_std, Y_mean, Y_std) = result
         print(f"Fold {fold}:")
         print(f"Training XTWX:\n{XTWX}")
@@ -116,8 +125,9 @@ if __name__ == "__main__":
     # We can also get the training set statistics without computing the training set
     # matrices. This is useful if we only need the statistics for further processing.
     print("Training set statistics:")
-    for fold in cvm.folds_dict:
-        result = cvm.training_statistics(fold)
+    for fold in partitioner.folds_dict:
+        val_indices = partitioner.get_validation_indices(fold)
+        result = cvm.training_statistics(val_indices)
         X_mean, X_std, Y_mean, Y_std = result
         print(f"Fold {fold}:")
         print(f"Training weighted X mean:\n{X_mean}")
