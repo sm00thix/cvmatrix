@@ -4,11 +4,11 @@ and the naive algorithms as described in the article by Engstrøm. The algorithm
 compared for different values of P, center_X, center_Y, scale_X, and scale_Y. The
 results are saved to a CSV file for further analysis.
 
-Engstrøm, O.-C. G. (2024):
-https://arxiv.org/abs/2401.13185
+O.-C. G. Engstrøm and M. H. Jensen (2025):
+https://analyticalsciencejournals.onlinelibrary.wiley.com/doi/full/10.1002/cem.70008
 
 Author: Ole-Christian Galbo Engstrøm
-E-mail: ole.e@di.ku.dk
+E-mail: ocge@foss.dk
 """
 
 import os
@@ -28,20 +28,24 @@ import numpy as np
 
 from cvmatrix.__init__ import __version__
 from cvmatrix.cvmatrix import CVMatrix
+from cvmatrix.partitioner import Partitioner
 from tests.naive_cvmatrix import NaiveCVMatrix
 
 
 def save_result_to_csv(
-    model, P, N, K, M, center_X, center_Y, scale_X, scale_Y, time, version
+    model, use_weights, P, N, K, M, center_X, center_Y, scale_X, scale_Y, time, version
 ):
     try:
         with open("benchmark_results.csv", "x") as f:
-            f.write("model,P,N,K,M," "center_X,center_Y,scale_X,scale_Y,time,version\n")
+            f.write(
+                "model,weights,P,N,K,M,"
+                "center_X,center_Y,scale_X,scale_Y,time,version\n"
+            )
     except FileExistsError:
         pass
     with open("benchmark_results.csv", "a") as f:
         f.write(
-            f"{model},{P},{N},{K},{M},"
+            f"{model},{use_weights},{P},{N},{K},{M},"
             f"{center_X},{center_Y},{scale_X},{scale_Y},"
             f"{time},{version}\n"
         )
@@ -96,7 +100,6 @@ def execute_algorithm(
 
     # Create the model
     model = model_class(
-        folds=cv_splits,
         center_X=center_X,
         center_Y=center_Y,
         scale_X=scale_X,
@@ -105,12 +108,26 @@ def execute_algorithm(
         copy=True,
     )
 
+    # Create the validation partitioner
+    p = Partitioner(folds=cv_splits)
+
     # Fit the model
     model.fit(X, Y, weights)
 
-    # Compute the training set matrices
-    for fold in model.folds_dict.keys():
-        model.training_XTX_XTY(fold)
+    if isinstance(model, NaiveCVMatrix):
+        # Compute the training set matrices
+        for fold in p.folds_dict:
+            # Get the training indices for the current fold
+            training_indices = np.concatenate(
+                [p.get_validation_indices(f) for f in p.folds_dict if f != fold]
+            )
+            model.training_XTX_XTY(training_indices)
+    else:
+        # Compute the training set matrices
+        for fold in p.folds_dict:
+            # Get the validation indices for the current fold
+            validation_indices = p.get_validation_indices(fold)
+            model.training_XTX_XTY(validation_indices)
 
 
 if __name__ == "__main__":
@@ -122,19 +139,20 @@ if __name__ == "__main__":
     dtype = np.float64  # Data type
     X = rng.random((N, K), dtype=dtype)  # Random X matrix
     Y = rng.random((N, M), dtype=dtype)  # Random Y matrix
-    # weights = rng.random((N,), dtype=dtype)  # Random weights
-    weights = None
+    weights = rng.random((N,), dtype=dtype)  # Random weights
     cv_splits = np.arange(N)  # We can use mod P for P-fold cross-validation
+    use_weights = [True, False]  # Whether to use weights or not
     center_Xs = [True, False]
     center_Ys = [True, False]
     scale_Xs = [True, False]
     scale_Ys = [True, False]
     Ps = [3, 5, 10, 100, 1000, 10000, 100000]
 
-    for center_X, center_Y, scale_X, scale_Y, P in product(
-        center_Xs, center_Ys, scale_Xs, scale_Ys, Ps
+    for use_w, center_X, center_Y, scale_X, scale_Y, P in product(
+        use_weights, center_Xs, center_Ys, scale_Xs, scale_Ys, Ps
     ):
         print(
+            f"weights={use_w}, "
             f"P={P}, "
             f"center_X={center_X}, center_Y={center_Y}, "
             f"scale_X={scale_X}, scale_Y={scale_Y}, "
@@ -149,13 +167,14 @@ if __name__ == "__main__":
                 scale_Y=scale_Y,
                 X=X,
                 Y=Y,
-                weights=weights,
+                weights=weights if use_weights else None,
             ),
             number=1,
         )
         print(f"CVMatrix, Time: {time:.2f} seconds")
         save_result_to_csv(
             "CVMatrix",
+            use_w,
             P,
             N,
             K,
@@ -191,6 +210,7 @@ if __name__ == "__main__":
             print()
             save_result_to_csv(
                 "NaiveCVMatrix",
+                use_w,
                 P,
                 N,
                 K,

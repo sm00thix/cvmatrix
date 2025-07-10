@@ -40,6 +40,7 @@ The `cvmatrix` software package now also features **weigthed matrix produts** $\
 > ```python
 > import numpy as np
 > from cvmatrix.cvmatrix import CVMatrix
+> from cvmatrix.partitioner import Partitioner
 >
 > N = 100  # Number of samples.
 > K = 50  # Number of features.
@@ -55,30 +56,34 @@ The `cvmatrix` software package now also features **weigthed matrix produts** $\
 >
 > # Instantiate CVMatrix
 > cvm = CVMatrix(
->     folds=folds,
 >     center_X=True, # Cemter around the weighted mean of X.
 >     center_Y=True, # Cemter around the weighted mean of Y.
 >     scale_X=True, # Scale by the weighted standard deviation of X.
 >     scale_Y=True, # Scale by the weighted standard deviation of Y.
 > )
-> # Fit on X and Y
+> # Fit on X, Y, and weights
 > cvm.fit(X=X, Y=Y, weights=weights)
+>
+> # Instantiate Partitioner
+> p = Partitioner(folds=folds)
+>
 > # Compute training set XTWX and/or XTWY for each fold
-> for fold in cvm.folds_dict:
+> for fold in p.folds_dict:
+>     val_indices = p.get_validation_indices(fold)
 >     # Get both XTWX, XTWY, and weighted statistics
->     result = cvm.training_XTX_XTY(fold)
+>     result = cvm.training_XTX_XTY(val_indices)
 >     (training_XTWX, training_XTWY) = result[0]
 >     (training_X_mean, training_X_std, training_Y_mean, training_Y_std) = result[1]
 >     
 >     # Get only XTWX and weighted statistics for X.
 >     # Weighted statistics for Y are returned as None as they are not computed when
 >     # only XTWX is requested.
->     result = cvm.training_XTX(fold)
+>     result = cvm.training_XTX(val_indices)
 >     training_XTWX = result[0]
 >     (training_X_mean, training_X_std, training_Y_mean, training_Y_std) = result[1]
 >     
 >     # Get only XTWY and weighted statistics
->     result = cvm.training_XTY(fold)
+>     result = cvm.training_XTY(val_indices)
 >     training_XTWY = result[0]
 >     (training_X_mean, training_X_std, training_Y_mean, training_Y_std) = result[1]
 

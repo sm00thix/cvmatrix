@@ -1,17 +1,16 @@
 """
 Contains the CVMatrix class which implements methods for naive computation of training
 set kernel matrices in cross-validation using the naive algorithms described in the
-paper by Engstrøm. The implementation is written using NumPy.
+paper by Engstrøm and Jensen. The implementation is written using NumPy.
 
-Engstrøm, O.-C. G. (2024):
-https://arxiv.org/abs/2401.13185
+O.-C. G. Engstrøm and M. H. Jensen (2025):
+https://analyticalsciencejournals.onlinelibrary.wiley.com/doi/full/10.1002/cem.70008
 
 Author: Ole-Christian Galbo Engstrøm
-E-mail: ole.e@di.ku.dk
+E-mail: ocge@foss.dk
 """
 
-from collections.abc import Hashable
-from typing import Iterable, Tuple, Union
+from typing import Tuple, Union
 
 import numpy as np
 from numpy import typing as npt
@@ -23,14 +22,11 @@ class NaiveCVMatrix(CVMatrix):
     """
     Implements the naive cross-validation algorithms for kernel matrix-based models such
     as PCA, PCR, PLS, and OLS. The algorithms are described in detail in the paper by
-    O.-C. G. Engstrøm: https://arxiv.org/abs/2401.13185
+    O.-C. G. Engstrøm and M. H. Jensen:
+    https://analyticalsciencejournals.onlinelibrary.wiley.com/doi/full/10.1002/cem.70008
 
     Parameters
     ----------
-    folds : Iterable of Hashable with N elements
-        An iterable defining cross-validation splits. Each unique value in
-        `folds` corresponds to a different fold.
-
     center_X : bool, optional, default=True
         Whether to center `X` before computation of
         :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` and
@@ -88,7 +84,6 @@ class NaiveCVMatrix(CVMatrix):
 
     def __init__(
         self,
-        folds: Iterable[Hashable],
         center_X: bool = True,
         center_Y: bool = True,
         scale_X: bool = True,
@@ -99,7 +94,6 @@ class NaiveCVMatrix(CVMatrix):
         fast_weight_computation: bool = True,
     ) -> None:
         super().__init__(
-            folds=folds,
             center_X=center_X,
             center_Y=center_Y,
             scale_X=scale_X,
@@ -108,7 +102,7 @@ class NaiveCVMatrix(CVMatrix):
             dtype=dtype,
             copy=copy,
         )
-        self.W_total = None
+        self.W = None
         self.fast_weight_computation = fast_weight_computation
 
     def fit(
@@ -138,19 +132,19 @@ class NaiveCVMatrix(CVMatrix):
         ValueError
             If `weights` is provided and contains negative values.
         """
-        self.X_total = self._init_mat(X)
-        self.N, self.K = self.X_total.shape
+        self.X = self._init_mat(X)
+        self.N, self.K = self.X.shape
         if Y is not None:
-            self.Y_total = self._init_mat(Y)
-            self.M = self.Y_total.shape[1]
+            self.Y = self._init_mat(Y)
+            self.M = self.Y.shape[1]
         if weights is not None:
-            self.w_total = self._init_mat(weights)
-            if np.any(self.w_total < 0):
+            self.weights = self._init_mat(weights)
+            if np.any(self.weights < 0):
                 raise ValueError("Weights must be non-negative.")
             if not self.fast_weight_computation:
-                self.W_total = np.diag(self.w_total.squeeze())
+                self.W = np.diag(self.weights.squeeze())
         else:
-            self.w_total = None
+            self.weights = None
 
     def _compute_training_mat_std(
         self,
@@ -174,7 +168,7 @@ class NaiveCVMatrix(CVMatrix):
         return std
 
     def _training_matrices(
-        self, return_XTX: bool, return_XTY: bool, fold: Hashable
+        self, return_XTX: bool, return_XTY: bool, training_indices: npt.NDArray[np.int_]
     ) -> Tuple[
         Union[np.ndarray, tuple[np.ndarray, np.ndarray]],
         Tuple[
@@ -188,14 +182,11 @@ class NaiveCVMatrix(CVMatrix):
             raise ValueError(
                 "At least one of `return_XTX` and `return_XTY` must be True."
             )
-        if return_XTY and self.Y_total is None:
+        if return_XTY and self.Y is None:
             raise ValueError("Response variables `Y` are not provided.")
-        training_indices = np.concatenate(
-            [self.folds_dict.get(i) for i in self.folds_dict if i != fold]
-        )
-        X_train = self.X_total[training_indices]
-        if self.w_total is not None:
-            w_train = self.w_total[training_indices]
+        X_train = self.X[training_indices]
+        if self.weights is not None:
+            w_train = self.weights[training_indices]
             squeezed_w_train = w_train.squeeze()
             if (
                 self.center_X
@@ -243,7 +234,7 @@ class NaiveCVMatrix(CVMatrix):
             X_train = X_train / X_train_std
 
         if return_XTY:
-            Y_train = self.Y_total[training_indices]
+            Y_train = self.Y[training_indices]
             if self.center_Y or self.scale_Y:
                 orig_Y_train_mean = np.average(
                     Y_train, axis=0, weights=squeezed_w_train, keepdims=True
@@ -266,12 +257,10 @@ class NaiveCVMatrix(CVMatrix):
         if w_train is not None:
             if self.fast_weight_computation:
                 operator = np.multiply
-                w_train_to_use = squeezed_w_train
+                w_train_to_use = w_train.T
             else:
                 operator = np.matmul
-                w_train_to_use = self.W_total[
-                    np.ix_(training_indices, training_indices)
-                ]
+                w_train_to_use = self.W[np.ix_(training_indices, training_indices)]
             X_train_T_W = operator(X_train.T, w_train_to_use)
         else:
             X_train_T_W = X_train.T

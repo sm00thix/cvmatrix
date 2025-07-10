@@ -16,9 +16,8 @@ https://openaccess.thecvf.com/content/ICCV2023W/CVPPA/html/Engstrom_Improving_De
 Dataset repository: https://github.com/Sm00thix/IKPLSTestData
 
 Author: Ole-Christian Galbo Engstrøm
-E-mail: ole.e@di.ku.dk
+E-mail: ocge@foss.dk
 """
-
 
 import io
 from urllib.request import urlopen
