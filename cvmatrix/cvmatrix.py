@@ -53,7 +53,7 @@ class CVMatrix:
     scale_Y : bool, optional, default=True
         Whether to scale `Y` before computation of
         :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}` by dividing each row with
-        the row of `X`'s column-wise weighted standard deviations. The row of
+        the row of `Y`'s column-wise weighted standard deviations. The row of
         column-wise weighted standard deviations is computed on the training set for
         each fold to avoid data leakage. This parameter is ignored if `Y` is `None`.
 
