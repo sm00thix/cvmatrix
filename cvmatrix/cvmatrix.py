@@ -10,7 +10,7 @@ Author: Ole-Christian Galbo Engstrøm
 E-mail: ocge@foss.dk
 """
 
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 from numpy import typing as npt
@@ -185,8 +185,8 @@ class CVMatrix:
     def fit(
         self,
         X: npt.ArrayLike,
-        Y: Union[None, npt.ArrayLike] = None,
-        weights: Union[None, npt.ArrayLike] = None,
+        Y: Optional[npt.ArrayLike] = None,
+        weights: Optional[npt.ArrayLike] = None,
     ) -> None:
         """
         Loads and stores `X`, `Y`, and "weights", for cross-validation. Computes
@@ -208,6 +208,10 @@ class CVMatrix:
             Weights for each sample in `X` and `Y`. If `None`, no weights are used in
             the computations. If provided, the weights must be non-negative.
 
+        Returns
+        -------
+        None
+
         Raises
         ------
         ValueError
@@ -221,7 +225,7 @@ class CVMatrix:
     def training_XTX(
         self, validation_indices: npt.NDArray[np.int_]
     ) -> Tuple[
-        np.ndarray, Tuple[Union[None, np.ndarray], Union[None, np.ndarray], None, None]
+        np.ndarray, Tuple[Optional[np.ndarray], Optional[np.ndarray], None, None]
     ]:
         """
         Computes the training set :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`
@@ -240,11 +244,11 @@ class CVMatrix:
 
         Returns
         -------
-        Tuple of two elements. The first element is an array of shape (K, K)
-            corresponding to the training set
-            :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`. The second element is
-            a tuple containing the row of column-wise weighted means for `X`, the row
-            of column-wise weighted standard deviations for `X`, and two `None`
+        Tuple of two elements.
+            The first element is an array of shape (K, K) corresponding to the training
+            set :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`. The second element
+            is a tuple containing the row of column-wise weighted means for `X`, the
+            row of column-wise weighted standard deviations for `X`, and two `None`
             corresponding to the non-computed rows of column-wise weighted means and
             standard deviations for `Y`. If a statistic is not computed, it is `None`.
 
@@ -280,10 +284,10 @@ class CVMatrix:
     def training_XTY(self, validation_indices: npt.NDArray[np.int_]) -> Tuple[
         np.ndarray,
         Tuple[
-            Union[None, np.ndarray],
-            Union[None, np.ndarray],
-            Union[None, np.ndarray],
-            Union[None, np.ndarray],
+            Optional[np.ndarray],
+            Optional[np.ndarray],
+            Optional[np.ndarray],
+            Optional[np.ndarray],
         ],
     ]:
         """
@@ -305,9 +309,9 @@ class CVMatrix:
 
         Returns
         -------
-        Tuple of two elements. The first element is an array of shape (K, M)
-            corresponding to the training set
-            :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`. The second element
+        Tuple of two elements.
+            The first element is an array of shape (K, M) corresponding to the training
+            set :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`. The second element
             is a tuple containing the row of column-wise weighted means for `X`, the
             row of column-wise weighted standard deviations for `X`, the row of
             column-wise weighted means for `Y`, and the row of column-wise weighted
@@ -344,10 +348,10 @@ class CVMatrix:
     def training_XTX_XTY(self, validation_indices: npt.NDArray[np.int_]) -> Tuple[
         Tuple[np.ndarray, np.ndarray],
         Tuple[
-            Union[None, np.ndarray],
-            Union[None, np.ndarray],
-            Union[None, np.ndarray],
-            Union[None, np.ndarray],
+            Optional[np.ndarray],
+            Optional[np.ndarray],
+            Optional[np.ndarray],
+            Optional[np.ndarray],
         ],
     ]:
         """
@@ -372,9 +376,9 @@ class CVMatrix:
 
         Returns
         -------
-        Tuple of two tuples. The first tuple contains arrays of shapes (K, K) and
-            (K, M). These are the training set
-            :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` and
+        Tuple of two tuples.
+            The first tuple contains arrays of shapes (K, K) and (K, M). These are the
+            training set :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` and
             :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`. The second tuple
             contains the row of column-wise weighted means for `X`, the row of
             column-wise weighted standard deviations for `X`, the row of column-wise
@@ -408,10 +412,10 @@ class CVMatrix:
         return self._training_matrices(True, True, validation_indices)
 
     def training_statistics(self, validation_indices: npt.NDArray[np.int_]) -> Tuple[
-        Union[None, np.ndarray],
-        Union[None, np.ndarray],
-        Union[None, np.ndarray],
-        Union[None, np.ndarray],
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+        Optional[np.ndarray],
     ]:
         """
         Computes the row of column-wise weighted means and standard deviations for `X`
@@ -430,7 +434,7 @@ class CVMatrix:
 
         Returns
         -------
-        Tuple of four elements of Union[None, np.ndarray]
+        Tuple of four elements of Optional[np.ndarray]
             A tuple containing the row of column-wise weighted means for `X`, the row
             of column-wise weighted standard deviations for `X`, the row of column-wise
             weighted means for `Y`, and the row of column-wise weighted standard
@@ -509,20 +513,20 @@ class CVMatrix:
     def _compute_training_stats(
         self,
         val_indices: npt.NDArray[np.int_],
-        X_val: Union[None, np.ndarray],
-        X_val_unweighted: Union[None, np.ndarray],
-        Y_val: Union[None, np.ndarray],
-        Y_val_unweighted: Union[None, np.ndarray],
+        X_val: Optional[np.ndarray],
+        X_val_unweighted: Optional[np.ndarray],
+        Y_val: Optional[np.ndarray],
+        Y_val_unweighted: Optional[np.ndarray],
         return_X_mean: bool,
         return_X_std: bool,
         return_Y_mean: bool,
         return_Y_std: bool,
     ) -> Tuple[
-        Union[None, np.ndarray],
-        Union[None, np.ndarray],
-        Union[None, np.ndarray],
-        Union[None, np.ndarray],
-        Union[None, float],
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+        Optional[float],
     ]:
         """
         Computes the training set statistics. The training set corresponds
@@ -570,7 +574,7 @@ class CVMatrix:
 
         Returns
         -------
-        Tuple of Union[None, np.ndarray]
+        Tuple of Optional[np.ndarray]
             A tuple containing the row of column-wise weighted means for `X`, the row
             of column-wise weighted standard deviations for `X`, the row of column-wise
             weighted means for `Y`, the row of column-wise weighted standard deviations
@@ -638,10 +642,10 @@ class CVMatrix:
     ) -> Tuple[
         Union[np.ndarray, Tuple[np.ndarray, np.ndarray]],
         Tuple[
-            Union[None, np.ndarray],
-            Union[None, np.ndarray],
-            Union[None, np.ndarray],
-            Union[None, np.ndarray],
+            Optional[np.ndarray],
+            Optional[np.ndarray],
+            Optional[np.ndarray],
+            Optional[np.ndarray],
         ],
     ]:
         """
@@ -669,15 +673,15 @@ class CVMatrix:
 
         Returns
         -------
-        Tuple of two elements. The first element is an array of shape (K, K) or (K, M)
-            or a tuple of arrays of shapes (K, K) and (K, M). These are the training
-            set :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` and/or
-            training set :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`. The
-            second element is a tuple containing the row of column-wise weighted means
-            for `X`, the row of column-wise weighted standard deviations for `X`, the
-            row of column-wise weighted means for `Y`, and the row of column-wise
-            weighted standard deviations for `Y`. If a statistic is not computed, it is
-            `None`.
+        Tuple of two elements.
+            The first element is an array of shape (K, K) or (K, M) or a tuple of
+            arrays of shapes (K, K) and (K, M). These are the training set
+            :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` and/or training set
+            :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`. The second element is
+            a tuple containing the row of column-wise weighted means for `X`, the row
+            of column-wise weighted standard deviations for `X`, the row of column-wise
+            weighted means for `Y`, and the row of column-wise weighted standard
+            deviations for `Y`. If a statistic is not computed, it is `None`.
 
         Raises
         ------
@@ -787,8 +791,8 @@ class CVMatrix:
         np.ndarray,
         np.ndarray,
         np.ndarray,
-        Union[None, np.ndarray],
-        Union[None, np.ndarray],
+        Optional[np.ndarray],
+        Optional[np.ndarray],
     ]:
         """
         Returns the validation set matrices for a given fold.
@@ -832,11 +836,11 @@ class CVMatrix:
         total_kernel_mat: np.ndarray,
         X_val: np.ndarray,
         mat2_val: np.ndarray,
-        X_train_mean: Union[None, np.ndarray] = None,
-        mat2_train_mean: Union[None, np.ndarray] = None,
-        X_train_std: Union[None, np.ndarray] = None,
-        mat2_train_std: Union[None, np.ndarray] = None,
-        sum_w_train: Union[None, float] = None,
+        X_train_mean: Optional[np.ndarray] = None,
+        mat2_train_mean: Optional[np.ndarray] = None,
+        X_train_std: Optional[np.ndarray] = None,
+        mat2_train_std: Optional[np.ndarray] = None,
+        sum_w_train: Optional[float] = None,
         center: bool = False,
     ) -> np.ndarray:
         """
@@ -1037,8 +1041,8 @@ class CVMatrix:
     def _init_mats(
         self,
         X: npt.ArrayLike,
-        Y: Union[None, npt.ArrayLike],
-        weights: Union[None, npt.ArrayLike],
+        Y: Optional[npt.ArrayLike],
+        weights: Optional[npt.ArrayLike],
     ) -> None:
         """
         Initializes the matrices `X`, `Y`, and `weights` with the provided
