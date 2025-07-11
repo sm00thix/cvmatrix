@@ -100,29 +100,39 @@ class CVMatrix:
         entire dataset. This is computed only if `Y` is not `None`.
 
     sum_X : np.ndarray or None
-        The row of column-wise weighted means for `X` for the entire dataset. This is
-        computed only if `center_X`, `scale_X`, or `center_Y` is `True`.
+        The row of column-wise weighted sums of `X` for the entire dataset. This is
+        computed only if `center_X`, `scale_X`, or `center_Y` is `True`. This is the
+        row of column-wise sums of :math:`\mathbf{W}\mathbf{X}` if `weights` are
+        provided and otherwise the row of column-wise sums of :math:`\mathbf{X}`.
 
     sum_Y : np.ndarray or None
-        The row of column-wise weighted means for `Y` for the entire dataset. This is
+        The row of column-wise weighted sums of `Y` for the entire dataset. This is
         computed only if `center_Y`, `scale_Y`, or `center_X` is `True` and `Y` is not
-        `None`.
+        `None`. This is the row of column-wise sums of :math:`\mathbf{W}\mathbf{Y}` if
+        `weights` are provided and otherwise the row of column-wise sums of
+        :math:`\mathbf{Y}`.
 
     sum_sq_X : np.ndarray or None
-        The row of column-wise weighted standard deviations for `X` for the entire
-        dataset. This is computed only if `scale_X` is `True`.
+        The row of column-wise weighted squared sums of `X` for the entire dataset.
+        This is computed only if `scale_X` is `True`. This is the
+        row of column-wise sums of :math:`\mathbf{W}\mathbf{X}\odot\mathbf{X}` if
+        `weights` are provided and otherwise the row of column-wise sums of
+        :math:`\mathbf{X}\odot\mathbf{X}`.
 
     sum_sq_Y : np.ndarray or None
-        The row of column-wise weighted standard deviations for `Y` for the entire
-        dataset. This is computed only if `scale_Y` is `True` and `Y` is not `None`.
+        The row of column-wise weighted squared sums of `Y` for the entire dataset.
+        This is computed only if `scale_Y` is `True` and `Y` is not `None`. This is the
+        row of column-wise sums of :math:`\mathbf{W}\mathbf{Y}\odot\mathbf{Y}` if
+        `weights` are provided and otherwise the row of column-wise sums of
+        :math:`\mathbf{Y}\odot\mathbf{Y}`.
 
     Xw : np.ndarray or None
         The total weighted predictor matrix `X` for the entire dataset. This is
-        :math:`\mathbf{X}\mathbf{W}`.
+        :math:`\mathbf{W}\mathbf{X}`.
 
     Yw : np.ndarray or None
         The total weighted response matrix `Y` for the entire dataset. This is
-        :math:`\mathbf{Y}\mathbf{W}`. This is computed only if `Y` is not `None`.
+        :math:`\mathbf{W}\mathbf{Y}`. This is computed only if `Y` is not `None`.
 
     weights : np.ndarray or None
         The total weights for the entire dataset. This is an array of shape (N, 1). If
