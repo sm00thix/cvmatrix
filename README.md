@@ -50,8 +50,10 @@ The `cvmatrix` software package now also features **weigthed matrix produts** $\
 > Y = np.random.uniform(size=(N, M)) # Random Y data
 > folds = np.arange(100) % 5 # 5-fold cross-validation
 >
-> # Weights must be non-negative and the sum of weights for any training partition must
-> # be greater than zero.
+> # Weights must be non-negative. If centering or scaling is used, the sum of weights
+> # for any training partition must be greater than zero. If scaling is used, the
+> # number of non-negative weights for any training partition must be greater than
+> # the ddof provided in the constructor.
 > weights = np.random.uniform(size=(N,)) + 0.1
 >
 > # Instantiate CVMatrix
