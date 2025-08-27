@@ -126,11 +126,11 @@ class CVMatrix:
         `weights` are provided and otherwise the row of column-wise sums of
         :math:`\mathbf{Y}\odot\mathbf{Y}`.
 
-    Xw : np.ndarray or None
+    WX : np.ndarray or None
         The total weighted predictor matrix `X` for the entire dataset. This is
         :math:`\mathbf{W}\mathbf{X}`.
 
-    Yw : np.ndarray or None
+    WY : np.ndarray or None
         The total weighted response matrix `Y` for the entire dataset. This is
         :math:`\mathbf{W}\mathbf{Y}`. This is computed only if `Y` is not `None`.
 
@@ -176,8 +176,8 @@ class CVMatrix:
         self.sum_Y = None
         self.sum_sq_X = None
         self.sum_sq_Y = None
-        self.Xw = None
-        self.Yw = None
+        self.WX = None
+        self.WY = None
         self.weights = None
         self.sum_w = None
         self.num_nonzero_w = None
@@ -593,39 +593,37 @@ class CVMatrix:
         )
         if return_X_mean or return_X_std:
             sum_X_val = np.sum(X_val, axis=0, keepdims=True)
+            sum_X_train = self._compute_train_mat_sum(sum_X_val, self.sum_X)
             X_train_mean = self._compute_training_mat_mean(
-                sum_X_val,
-                self.sum_X,
+                sum_X_train,
                 sum_w_train,
             )
         if return_Y_mean or return_Y_std:
             sum_Y_val = np.sum(Y_val, axis=0, keepdims=True)
+            sum_Y_train = self._compute_train_mat_sum(sum_Y_val, self.sum_Y)
             Y_train_mean = self._compute_training_mat_mean(
-                sum_Y_val,
-                self.sum_Y,
+                sum_Y_train,
                 sum_w_train,
             )
         if return_X_std or return_Y_std:
             divisor = self._compute_std_divisor(sum_w_train, num_nonzero_w_train)
         if return_X_std:
             X_train_std = self._compute_training_mat_std(
-                sum_X_val,
                 X_val,
                 X_val_unweighted,
                 X_train_mean,
-                self.sum_X,
                 self.sum_sq_X,
+                sum_X_train,
                 sum_w_train,
                 divisor,
             )
         if return_Y_std:
             Y_train_std = self._compute_training_mat_std(
-                sum_Y_val,
                 Y_val,
                 Y_val_unweighted,
                 Y_train_mean,
-                self.sum_Y,
                 self.sum_sq_Y,
+                sum_Y_train,
                 sum_w_train,
                 divisor,
             )
@@ -812,7 +810,7 @@ class CVMatrix:
             variables `Y_unweighted`. If `return_XTY` is `False`, `Y` and
             `Y_unweighted` will be `None`.
         """
-        X_val = self.Xw[val_indices]
+        X_val = self.WX[val_indices]
         if self.weights is None:
             X_val_unweighted = X_val
         else:
@@ -824,7 +822,7 @@ class CVMatrix:
                 Y_val = self.Y[val_indices]
                 Y_val_unweighted = Y_val
             else:
-                Y_val = self.Yw[val_indices]
+                Y_val = self.WY[val_indices]
                 Y_val_unweighted = self.Y[val_indices]
         else:
             Y_val = None
@@ -900,10 +898,19 @@ class CVMatrix:
             return XTmat2_train / mat2_train_std
         return XTmat2_train
 
-    def _compute_training_mat_mean(
+    def _compute_train_mat_sum(
         self,
         sum_mat_val: np.ndarray,
         sum_mat: np.ndarray,
+    ) -> np.ndarray:
+        """
+        Computes the row vector of column-wise sums of a matrix for a given fold.
+        """
+        return sum_mat - sum_mat_val
+
+    def _compute_training_mat_mean(
+        self,
+        sum_mat_train: np.ndarray,
         sum_w_train: float,
     ) -> np.ndarray:
         """
@@ -911,11 +918,8 @@ class CVMatrix:
 
         Parameters
         ----------
-        sum_mat_val : Array of shape (1, K) or (1, M)
-            The row of column-wise sums of validation set of `Xw` or `Yw`.
-
-        sum_mat : Array of shape (1, K) or (1, M)
-            The row of column-wise sums of the total `Xw` or `Yw`.
+        sum_mat_train : Array of shape (1, K) or (1, M)
+            The row of column-wise sums of the training set of `WX` or `WY`.
 
         sum_w_train : float
             The sum of weights in the training set.
@@ -925,7 +929,7 @@ class CVMatrix:
         Array of shape (1, K) or (1, M)
             The row of column-wise means of the training set matrix.
         """
-        return (sum_mat - sum_mat_val) / sum_w_train
+        return sum_mat_train / sum_w_train
 
     def _compute_std_divisor(
         self, sum_w_train: float, num_nonzero_w_train: int
@@ -956,12 +960,11 @@ class CVMatrix:
 
     def _compute_training_mat_std(
         self,
-        sum_mat_val: np.ndarray,
         mat_val: np.ndarray,
         mat_val_unweighted: np.ndarray,
         mat_train_mean: np.ndarray,
-        sum_mat: np.ndarray,
         sum_sq_mat: np.ndarray,
+        sum_mat_train: np.ndarray,
         sum_w_train: float,
         divisor: float,
     ) -> np.ndarray:
@@ -971,11 +974,8 @@ class CVMatrix:
 
         Parameters
         ----------
-        sum_mat_val : Array of shape (1, K) or (1, M)
-            The row of column-wise sums of validation set of `Xw` or `Yw`.
-
         mat_val : Array of shape (N_val, K) or (N_val, M)
-            The validation set of `Xw` or `Yw`.
+            The validation set of `WX` or `WY`.
 
         mat_val_unweighted : Array of shape (N_val, K) or (N_val, M)
             The validation set of `X` or `Y`.
@@ -983,12 +983,12 @@ class CVMatrix:
         mat_train_mean : Array of shape (1, K) or (1, M)
             The row of column-wise weighted means of the training matrix.
 
-        sum_mat : Array of shape (1, K) or (1, M)
-            The row of column-wise sums of the total weighted matrix.
-
         sum_sq_mat : Array of shape (1, K) or (1, M)
             The row of column-wise sums of products between the total weighted matrix
             and the total unweighted matrix.
+
+        sum_mat_val : Array of shape (1, K) or (1, M)
+            The row of column-wise sums of validation set of `WX` or `WY`.
 
         sum_w_train : float
             The size of the training set.
@@ -1002,12 +1002,11 @@ class CVMatrix:
         Array of shape (1, K) or (1, M)
             The row of column-wise standard deviations of the training set matrix.
         """
-        train_sum_mat = sum_mat - sum_mat_val
         train_sum_sq_mat = sum_sq_mat - np.sum(
             mat_val * mat_val_unweighted, axis=0, keepdims=True
         )
         mat_train_var = (
-            -2 * mat_train_mean * train_sum_mat
+            -2 * mat_train_mean * sum_mat_train
             + sum_w_train * mat_train_mean**2
             + train_sum_sq_mat
         ) / divisor
@@ -1047,7 +1046,7 @@ class CVMatrix:
         """
         Initializes the matrices `X`, `Y`, and `weights` with the provided
         data. If `Y` is `None`, then `Y` is not initialized. If `weights` is
-        provided, it initializes the weighted matrices `Xw` and `Yw`.
+        provided, it initializes the weighted matrices `WX` and `WY`.
 
         Parameters
         ----------
@@ -1080,19 +1079,19 @@ class CVMatrix:
 
     def _init_weighted_mats(self):
         """
-        Initializes the weighted matrices `Xw` and `Yw` if weights are
+        Initializes the weighted matrices `WX` and `WY` if weights are
         provided. These matrices are computed as the product of the original matrices
-        `X` and `Y` with the `weights`. If `Y` is `None`, then `Yw` is not initialized.
+        `X` and `Y` with the `weights`. If `Y` is `None`, then `WY` is not initialized.
         If `w` is `None`, then this method does nothing.
         """
         if self.weights is None:
-            self.Xw = self.X
+            self.WX = self.X
             if self.Y is not None:
-                self.Yw = self.Y
+                self.WY = self.Y
         else:
-            self.Xw = self.X * self.weights
+            self.WX = self.X * self.weights
             if self.Y is not None and (self.center_X or self.center_Y or self.scale_Y):
-                self.Yw = self.Y * self.weights
+                self.WY = self.Y * self.weights
 
     def _init_matrix_products(self) -> None:
         """
@@ -1100,9 +1099,9 @@ class CVMatrix:
         entire dataset. These are :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`
         and :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`, respectively.
         """
-        self.XTX = self.Xw.T @ self.X
+        self.XTX = self.WX.T @ self.X
         if self.Y is not None:
-            self.XTY = self.Xw.T @ self.Y
+            self.XTY = self.WX.T @ self.Y
 
     def _init_stats(self) -> None:
         """
@@ -1116,14 +1115,14 @@ class CVMatrix:
                 self.sum_w = self.N
                 self.num_nonzero_w = self.N
         if self.center_X or self.center_Y or self.scale_X:
-            self.sum_X = np.sum(self.Xw, axis=0, keepdims=True)
+            self.sum_X = np.sum(self.WX, axis=0, keepdims=True)
         if (self.center_X or self.center_Y or self.scale_Y) and self.Y is not None:
-            self.sum_Y = np.sum(self.Yw, axis=0, keepdims=True)
+            self.sum_Y = np.sum(self.WY, axis=0, keepdims=True)
         if self.scale_X:
-            self.sum_sq_X = np.sum(self.Xw * self.X, axis=0, keepdims=True)
+            self.sum_sq_X = np.sum(self.WX * self.X, axis=0, keepdims=True)
         else:
             self.sum_sq_X = None
         if self.scale_Y and self.Y is not None:
-            self.sum_sq_Y = np.sum(self.Yw * self.Y, axis=0, keepdims=True)
+            self.sum_sq_Y = np.sum(self.WY * self.Y, axis=0, keepdims=True)
         else:
             self.sum_sq_Y = None
