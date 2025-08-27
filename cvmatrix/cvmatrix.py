@@ -126,6 +126,16 @@ class CVMatrix:
         `weights` are provided and otherwise the row of column-wise sums of
         :math:`\mathbf{Y}\odot\mathbf{Y}`.
 
+    sq_X : np.ndarray or None
+        The total weighted squared predictor matrix `X` for the entire dataset. This is
+        :math:`\mathbf{W}\mathbf{X}\odot\mathbf{X}`. This is computed only if
+        `scale_X` is `True`.
+
+    sq_Y : np.ndarray or None
+        The total weighted squared response matrix `Y` for the entire dataset. This is
+        :math:`\mathbf{W}\mathbf{Y}\odot\mathbf{Y}`. This is computed only if
+        `scale_Y` is `True` and `Y` is not `None`.
+
     WX : np.ndarray or None
         The total weighted predictor matrix `X` for the entire dataset. This is
         :math:`\mathbf{W}\mathbf{X}`.
@@ -176,6 +186,8 @@ class CVMatrix:
         self.sum_Y = None
         self.sum_sq_X = None
         self.sum_sq_Y = None
+        self.sq_X = None
+        self.sq_Y = None
         self.WX = None
         self.WY = None
         self.weights = None
@@ -608,21 +620,21 @@ class CVMatrix:
         if return_X_std or return_Y_std:
             divisor = self._compute_std_divisor(sum_w_train, num_nonzero_w_train)
         if return_X_std:
+            sum_sq_X_val = np.sum(self.sq_X[val_indices], axis=0, keepdims=True)
+            sum_sq_X_train = self._compute_train_mat_sum(sum_sq_X_val, self.sum_sq_X)
             X_train_std = self._compute_training_mat_std(
-                X_val,
-                X_val_unweighted,
+                sum_sq_X_train,
                 X_train_mean,
-                self.sum_sq_X,
                 sum_X_train,
                 sum_w_train,
                 divisor,
             )
         if return_Y_std:
+            sum_sq_Y_val = np.sum(self.sq_Y[val_indices], axis=0, keepdims=True)
+            sum_sq_Y_train = self._compute_train_mat_sum(sum_sq_Y_val, self.sum_sq_Y)
             Y_train_std = self._compute_training_mat_std(
-                Y_val,
-                Y_val_unweighted,
+                sum_sq_Y_train,
                 Y_train_mean,
-                self.sum_sq_Y,
                 sum_Y_train,
                 sum_w_train,
                 divisor,
@@ -960,10 +972,8 @@ class CVMatrix:
 
     def _compute_training_mat_std(
         self,
-        mat_val: np.ndarray,
-        mat_val_unweighted: np.ndarray,
+        sum_sq_mat_train: np.ndarray,
         mat_train_mean: np.ndarray,
-        sum_sq_mat: np.ndarray,
         sum_mat_train: np.ndarray,
         sum_w_train: float,
         divisor: float,
@@ -974,21 +984,16 @@ class CVMatrix:
 
         Parameters
         ----------
-        mat_val : Array of shape (N_val, K) or (N_val, M)
-            The validation set of `WX` or `WY`.
-
-        mat_val_unweighted : Array of shape (N_val, K) or (N_val, M)
-            The validation set of `X` or `Y`.
+        sum_sq_mat_train : Array of shape (1, K) or (1, M)
+            The row of column-wise sums of products between the total weighted matrix
+            and the total unweighted matrix. This is :math:`\mathbf{W}\mathbf{X}\odot\mathbf{X}`
+            or :math:`\mathbf{W}\mathbf{Y}\odot\mathbf{Y}`.
 
         mat_train_mean : Array of shape (1, K) or (1, M)
             The row of column-wise weighted means of the training matrix.
 
-        sum_sq_mat : Array of shape (1, K) or (1, M)
-            The row of column-wise sums of products between the total weighted matrix
-            and the total unweighted matrix.
-
-        sum_mat_val : Array of shape (1, K) or (1, M)
-            The row of column-wise sums of validation set of `WX` or `WY`.
+        sum_mat_train : Array of shape (1, K) or (1, M)
+            The row of column-wise sums of the training set of `WX` or `WY`.
 
         sum_w_train : float
             The size of the training set.
@@ -1002,13 +1007,10 @@ class CVMatrix:
         Array of shape (1, K) or (1, M)
             The row of column-wise standard deviations of the training set matrix.
         """
-        train_sum_sq_mat = sum_sq_mat - np.sum(
-            mat_val * mat_val_unweighted, axis=0, keepdims=True
-        )
         mat_train_var = (
             -2 * mat_train_mean * sum_mat_train
             + sum_w_train * mat_train_mean**2
-            + train_sum_sq_mat
+            + sum_sq_mat_train
         ) / divisor
         mat_train_var[mat_train_var < 0] = 0
         mat_train_std = np.sqrt(mat_train_var)
@@ -1119,10 +1121,12 @@ class CVMatrix:
         if (self.center_X or self.center_Y or self.scale_Y) and self.Y is not None:
             self.sum_Y = np.sum(self.WY, axis=0, keepdims=True)
         if self.scale_X:
-            self.sum_sq_X = np.sum(self.WX * self.X, axis=0, keepdims=True)
+            self.sq_X = self.WX * self.X
+            self.sum_sq_X = np.sum(self.sq_X, axis=0, keepdims=True)
         else:
             self.sum_sq_X = None
         if self.scale_Y and self.Y is not None:
-            self.sum_sq_Y = np.sum(self.WY * self.Y, axis=0, keepdims=True)
+            self.sq_Y = self.WY * self.Y
+            self.sum_sq_Y = np.sum(self.sq_Y, axis=0, keepdims=True)
         else:
             self.sum_sq_Y = None
