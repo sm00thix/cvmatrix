@@ -2,9 +2,11 @@
 
 [![PyPI Version](https://img.shields.io/pypi/v/cvmatrix.svg)](https://pypi.python.org/pypi/cvmatrix/)
 
+[![Python Versions](https://img.shields.io/pypi/pyversions/cvmatrix.svg)](https://pypi.python.org/pypi/cvmatrix/)
+
 [![PyPI - Downloads](https://img.shields.io/pypi/dm/cvmatrix)](https://pypi.python.org/pypi/cvmatrix/)
 
-[![Python Versions](https://img.shields.io/pypi/pyversions/cvmatrix.svg)](https://pypi.python.org/pypi/cvmatrix/)
+[![Pepy - Total Downloads](https://img.shields.io/pepy/dt/cvmatrix)](https://pepy.tech/project/cvmatrix/)
 
 [![License](https://img.shields.io/pypi/l/cvmatrix.svg)](https://pypi.python.org/pypi/cvmatrix/)
 
