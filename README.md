@@ -8,7 +8,7 @@
 
 [![PyPI - Downloads](https://img.shields.io/pypi/dm/cvmatrix)](https://pypi.python.org/pypi/cvmatrix/)
 
-[![License](https://img.shields.io/pypi/l/cvmatrix.svg)](https://pypi.python.org/pypi/cvmatrix/)
+[![License](https://img.shields.io/pypi/l/cvmatrix)](https://pypi.python.org/pypi/cvmatrix/)
 
 [![Documentation Status](https://readthedocs.org/projects/cvmatrix/badge/?version=latest)](https://cvmatrix.readthedocs.io/en/latest/?badge=latest)
 
