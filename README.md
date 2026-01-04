@@ -1,6 +1,6 @@
 # CVMatrix
 
-[![PyPI Version](https://img.shields.io/pypi/v/cvmatrix.svg)](https://pypi.python.org/pypi/cvmatrix/)
+[![PyPI Version](https://img.shields.io/pypi/v/cvmatrix)](https://pypi.python.org/pypi/cvmatrix/)
 
 [![Python Versions](https://img.shields.io/pypi/pyversions/cvmatrix)](https://pypi.python.org/pypi/cvmatrix/)
 
