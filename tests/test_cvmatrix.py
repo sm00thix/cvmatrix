@@ -590,7 +590,7 @@ class TestClass:
             if use_w:
                 cur_weights = self.randomly_zero_weights(weights)
             else:
-                cur_weights = None
+                continue
             naive_hadamard = self.fit_naive(
                 X,
                 Y,

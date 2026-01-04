@@ -193,9 +193,7 @@ class NaiveCVMatrix(CVMatrix):
                 or self.scale_X
                 or (return_XTY and (self.center_Y or self.scale_Y))
             ):
-                num_nonzero_weights = np.asarray(
-                    np.count_nonzero(w_train), dtype=self.dtype
-                )
+                num_nonzero_weights = self.dtype(np.count_nonzero(w_train))
                 if num_nonzero_weights == 0:
                     raise ValueError(
                         "The number of non-zero weights in the training set must be "

@@ -72,89 +72,6 @@ class CVMatrix:
         input arrays are not NumPy arrays of type `dtype`, then a copy is made. If
         `True` a copy is always made. If no copy is made, then external modifications
         to `X` or `Y` will result in undefined behavior.
-
-    Attributes
-    ----------
-    X : np.ndarray
-        The total predictor matrix `X` for the entire dataset.
-
-    Y : np.ndarray or None
-        The total response matrix `Y` for the entire dataset. If `Y` is `None`, this is
-        `None`.
-
-    N : int
-        The number of samples in the dataset.
-
-    K : int
-        The number of predictor variables in `X`.
-
-    M : int or None
-        The number of response variables in `Y`. If `Y` is `None`, this is `None`.
-
-    XTX : np.ndarray
-        The total matrix :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` for the
-        entire dataset.
-
-    XTY : np.ndarray or None
-        The total matrix :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}` for the
-        entire dataset. This is computed only if `Y` is not `None`.
-
-    sum_X : np.ndarray or None
-        The row of column-wise weighted sums of `X` for the entire dataset. This is
-        computed only if `center_X`, `scale_X`, or `center_Y` is `True`. This is the
-        row of column-wise sums of :math:`\mathbf{W}\mathbf{X}` if `weights` are
-        provided and otherwise the row of column-wise sums of :math:`\mathbf{X}`.
-
-    sum_Y : np.ndarray or None
-        The row of column-wise weighted sums of `Y` for the entire dataset. This is
-        computed only if `center_Y`, `scale_Y`, or `center_X` is `True` and `Y` is not
-        `None`. This is the row of column-wise sums of :math:`\mathbf{W}\mathbf{Y}` if
-        `weights` are provided and otherwise the row of column-wise sums of
-        :math:`\mathbf{Y}`.
-
-    sum_sq_X : np.ndarray or None
-        The row of column-wise weighted squared sums of `X` for the entire dataset.
-        This is computed only if `scale_X` is `True`. This is the
-        row of column-wise sums of :math:`\mathbf{W}\mathbf{X}\odot\mathbf{X}` if
-        `weights` are provided and otherwise the row of column-wise sums of
-        :math:`\mathbf{X}\odot\mathbf{X}`.
-
-    sum_sq_Y : np.ndarray or None
-        The row of column-wise weighted squared sums of `Y` for the entire dataset.
-        This is computed only if `scale_Y` is `True` and `Y` is not `None`. This is the
-        row of column-wise sums of :math:`\mathbf{W}\mathbf{Y}\odot\mathbf{Y}` if
-        `weights` are provided and otherwise the row of column-wise sums of
-        :math:`\mathbf{Y}\odot\mathbf{Y}`.
-
-    sq_X : np.ndarray or None
-        The total weighted squared predictor matrix `X` for the entire dataset. This is
-        :math:`\mathbf{W}\mathbf{X}\odot\mathbf{X}`. This is computed only if
-        `scale_X` is `True`.
-
-    sq_Y : np.ndarray or None
-        The total weighted squared response matrix `Y` for the entire dataset. This is
-        :math:`\mathbf{W}\mathbf{Y}\odot\mathbf{Y}`. This is computed only if
-        `scale_Y` is `True` and `Y` is not `None`.
-
-    WX : np.ndarray or None
-        The total weighted predictor matrix `X` for the entire dataset. This is
-        :math:`\mathbf{W}\mathbf{X}`.
-
-    WY : np.ndarray or None
-        The total weighted response matrix `Y` for the entire dataset. This is
-        :math:`\mathbf{W}\mathbf{Y}`. This is computed only if `Y` is not `None`.
-
-    weights : np.ndarray or None
-        The total weights for the entire dataset. This is an array of shape (N, 1). If
-        `weights` is `None`, this is `None`.
-
-    sum_w : float or None
-        The sum of the weights for the entire dataset. If `weights` is `None`, this is
-        `None`.
-
-    num_nonzero_w : int or None
-        The number of non-zero weights for the entire dataset. If `weights` is `None`,
-        this is `None`.
     """
 
     def __init__(
@@ -172,7 +89,7 @@ class CVMatrix:
         self.scale_X = scale_X
         self.scale_Y = scale_Y
         self.ddof = ddof
-        self.dtype = dtype
+        self.dtype = dtype.type if isinstance(dtype, np.dtype) else dtype
         self.copy = copy
         self.resolution = np.finfo(dtype).resolution * 10
         self.X = None
@@ -219,6 +136,89 @@ class CVMatrix:
         weights : None or array-like of shape (N,) or (N, 1), optional, default=None
             Weights for each sample in `X` and `Y`. If `None`, no weights are used in
             the computations. If provided, the weights must be non-negative.
+
+        Attributes
+        ----------
+        X : np.ndarray
+            The total predictor matrix `X` for the entire dataset.
+
+        Y : np.ndarray or None
+            The total response matrix `Y` for the entire dataset. If `Y` is `None`, this is
+            `None`.
+
+        N : int
+            The number of samples in the dataset.
+
+        K : int
+            The number of predictor variables in `X`.
+
+        M : int or None
+            The number of response variables in `Y`. If `Y` is `None`, this is `None`.
+
+        XTX : np.ndarray
+            The total matrix :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` for the
+            entire dataset.
+
+        XTY : np.ndarray or None
+            The total matrix :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}` for the
+            entire dataset. This is computed only if `Y` is not `None`.
+
+        sum_X : np.ndarray or None
+            The row of column-wise weighted sums of `X` for the entire dataset. This is
+            computed only if `center_X`, `scale_X`, or `center_Y` is `True`. This is the
+            row of column-wise sums of :math:`\mathbf{W}\mathbf{X}` if `weights` are
+            provided and otherwise the row of column-wise sums of :math:`\mathbf{X}`.
+
+        sum_Y : np.ndarray or None
+            The row of column-wise weighted sums of `Y` for the entire dataset. This is
+            computed only if `center_Y`, `scale_Y`, or `center_X` is `True` and `Y` is not
+            `None`. This is the row of column-wise sums of :math:`\mathbf{W}\mathbf{Y}` if
+            `weights` are provided and otherwise the row of column-wise sums of
+            :math:`\mathbf{Y}`.
+
+        sum_sq_X : np.ndarray or None
+            The row of column-wise weighted squared sums of `X` for the entire dataset.
+            This is computed only if `scale_X` is `True`. This is the
+            row of column-wise sums of :math:`\mathbf{W}\mathbf{X}\odot\mathbf{X}` if
+            `weights` are provided and otherwise the row of column-wise sums of
+            :math:`\mathbf{X}\odot\mathbf{X}`.
+
+        sum_sq_Y : np.ndarray or None
+            The row of column-wise weighted squared sums of `Y` for the entire dataset.
+            This is computed only if `scale_Y` is `True` and `Y` is not `None`. This is the
+            row of column-wise sums of :math:`\mathbf{W}\mathbf{Y}\odot\mathbf{Y}` if
+            `weights` are provided and otherwise the row of column-wise sums of
+            :math:`\mathbf{Y}\odot\mathbf{Y}`.
+
+        sq_X : np.ndarray or None
+            The total weighted squared predictor matrix `X` for the entire dataset. This is
+            :math:`\mathbf{W}\mathbf{X}\odot\mathbf{X}`. This is computed only if
+            `scale_X` is `True`.
+
+        sq_Y : np.ndarray or None
+            The total weighted squared response matrix `Y` for the entire dataset. This is
+            :math:`\mathbf{W}\mathbf{Y}\odot\mathbf{Y}`. This is computed only if
+            `scale_Y` is `True` and `Y` is not `None`.
+
+        WX : np.ndarray or None
+            The total weighted predictor matrix `X` for the entire dataset. This is
+            :math:`\mathbf{W}\mathbf{X}`.
+
+        WY : np.ndarray or None
+            The total weighted response matrix `Y` for the entire dataset. This is
+            :math:`\mathbf{W}\mathbf{Y}`. This is computed only if `Y` is not `None`.
+
+        weights : np.ndarray or None
+            The total weights for the entire dataset. This is an array of shape (N, 1). If
+            `weights` is `None`, this is `None`.
+
+        sum_w : float or None
+            The sum of the weights for the entire dataset. If `weights` is `None`, this is
+            `None`.
+
+        num_nonzero_w : int or None
+            The number of non-zero weights for the entire dataset. If `weights` is `None`,
+            this is `None`.
 
         Returns
         -------
@@ -267,15 +267,11 @@ class CVMatrix:
         Raises
         ------
         ValueError
-            - If `Y` is `None`.
-            - If `self.center_X`, `self.center_Y`, `self.scale_X`, or `self.scale_Y` is
-                `True` and the corresponding weighted means and standard deviations
-                cannot be computed due to the training set having no non-zero
-                weights.
-            - If `self.scale_X` or `self.scale_Y` is `True` and the corresponding
-                weighted standard deviations cannot be computed due `self.ddof` being
-                greater or equal to the number of non-zero weights in the training
-                set.
+            - If `self.center_X` or `self.scale_X` is `True` but cannot be computed due
+                to the training set having no non-zero weights.
+            - If `self.scale_X` is `True` and the corresponding weighted standard
+                deviations cannot be computed due `self.ddof` being greater or equal to
+                the number of non-zero weights in the training set.
 
 
         See Also
@@ -293,7 +289,9 @@ class CVMatrix:
         """
         return self._training_matrices(True, False, validation_indices)
 
-    def training_XTY(self, validation_indices: npt.NDArray[np.int_]) -> Tuple[
+    def training_XTY(
+        self, validation_indices: npt.NDArray[np.int_]
+    ) -> Tuple[
         np.ndarray,
         Tuple[
             Optional[np.ndarray],
@@ -357,7 +355,9 @@ class CVMatrix:
         """
         return self._training_matrices(False, True, validation_indices)
 
-    def training_XTX_XTY(self, validation_indices: npt.NDArray[np.int_]) -> Tuple[
+    def training_XTX_XTY(
+        self, validation_indices: npt.NDArray[np.int_]
+    ) -> Tuple[
         Tuple[np.ndarray, np.ndarray],
         Tuple[
             Optional[np.ndarray],
@@ -423,7 +423,9 @@ class CVMatrix:
         """
         return self._training_matrices(True, True, validation_indices)
 
-    def training_statistics(self, validation_indices: npt.NDArray[np.int_]) -> Tuple[
+    def training_statistics(
+        self, validation_indices: npt.NDArray[np.int_]
+    ) -> Tuple[
         Optional[np.ndarray],
         Optional[np.ndarray],
         Optional[np.ndarray],
@@ -471,20 +473,16 @@ class CVMatrix:
         return self._compute_training_stats(
             val_indices=validation_indices,
             X_val=X_val,
-            X_val_unweighted=X_val_unweighted,
             Y_val=Y_val,
-            Y_val_unweighted=Y_val_unweighted,
             return_X_mean=self.center_X or self.scale_X,
             return_X_std=self.scale_X,
             return_Y_mean=(self.center_Y or self.scale_Y) and self.Y is not None,
             return_Y_std=self.scale_Y and self.Y is not None,
-        )[
-            :-1
-        ]  # Exclude the sum of training weights from the return tuple
+        )[:-1]  # Exclude the sum of training weights from the return tuple
 
     def _get_sum_w_train_and_num_nonzero_w_train(
         self, val_indices: npt.NDArray[np.int_]
-    ) -> Tuple[float, float]:
+    ) -> Tuple[np.floating, np.floating]:
         """
         Returns a tuple containing the sum of weights in the training set and the number
         of non-zero weights in the training set. If `self.weights` is `None`, it returns
@@ -505,16 +503,14 @@ class CVMatrix:
             deviations.
         """
         if self.weights is None:
-            sum_w_val = np.asarray(val_indices.size, dtype=self.dtype)
-            sum_w_train = self.sum_w - sum_w_val
+            sum_w_val = val_indices.size
+            sum_w_train = self.dtype(self.sum_w - sum_w_val)
             return (sum_w_train, sum_w_train)
         w_val = self.weights[val_indices]
         sum_w_val = np.sum(w_val)
-        sum_w_train = self.sum_w - sum_w_val
+        sum_w_train = self.dtype(self.sum_w - sum_w_val)
         num_nonzero_w_val = np.count_nonzero(w_val)
-        num_nonzero_w_train = np.asarray(
-            self.num_nonzero_w - num_nonzero_w_val, dtype=self.dtype
-        )
+        num_nonzero_w_train = self.dtype(self.num_nonzero_w - num_nonzero_w_val)
         if num_nonzero_w_train == 0:
             raise ValueError(
                 "The number of non-zero weights in the training set must be "
@@ -526,9 +522,7 @@ class CVMatrix:
         self,
         val_indices: npt.NDArray[np.int_],
         X_val: Optional[np.ndarray],
-        X_val_unweighted: Optional[np.ndarray],
         Y_val: Optional[np.ndarray],
-        Y_val_unweighted: Optional[np.ndarray],
         return_X_mean: bool,
         return_X_std: bool,
         return_Y_mean: bool,
@@ -538,7 +532,7 @@ class CVMatrix:
         Optional[np.ndarray],
         Optional[np.ndarray],
         Optional[np.ndarray],
-        Optional[float],
+        Optional[np.floating],
     ]:
         """
         Computes the training set statistics. The training set corresponds
@@ -557,18 +551,10 @@ class CVMatrix:
             statistics for `X` are computed. Required if `return_X_mean` or
             `return_X_std` is `True`.
 
-        X_val_unweighted : None or Array of shape (N_val, K)
-            The validation set of unweighted predictor variables. Required if
-            `return_X_std` is `True`.
-
         Y_val : None or Array of shape (N_val, M)
             The validation set of weighted response variables. If `None`, no statistics
             for `Y` are computed. Required if `return_Y_mean` or `return_Y_std` is
             `True`.
-
-        Y_val_unweighted : None or Array of shape (N_val, M)
-            The validation set of unweighted response variables. Required if
-            `return_Y_std` is `True`.
 
         return_X_mean : bool
             Whether to compute the row of column-wise weighted means for `X`.
@@ -716,14 +702,10 @@ class CVMatrix:
                     if self.center_X or self.scale_X or (return_XTY and self.center_Y)
                     else None
                 ),
-                X_val_unweighted=X_val_unweighted if self.scale_X else None,
                 Y_val=(
                     Y_val
                     if return_XTY and (self.center_X or self.center_Y or self.scale_Y)
                     else None
-                ),
-                Y_val_unweighted=(
-                    Y_val_unweighted if return_XTY and self.scale_Y else None
                 ),
                 return_X_mean=self.center_X or (return_XTY and self.center_Y),
                 return_Y_mean=return_XTY and (self.center_X or self.center_Y),
@@ -800,7 +782,6 @@ class CVMatrix:
     ) -> Tuple[
         np.ndarray,
         np.ndarray,
-        np.ndarray,
         Optional[np.ndarray],
         Optional[np.ndarray],
     ]:
@@ -850,7 +831,7 @@ class CVMatrix:
         mat2_train_mean: Optional[np.ndarray] = None,
         X_train_std: Optional[np.ndarray] = None,
         mat2_train_std: Optional[np.ndarray] = None,
-        sum_w_train: Optional[float] = None,
+        sum_w_train: Optional[np.floating] = None,
         center: bool = False,
     ) -> np.ndarray:
         """
@@ -923,7 +904,7 @@ class CVMatrix:
     def _compute_training_mat_mean(
         self,
         sum_mat_train: np.ndarray,
-        sum_w_train: float,
+        sum_w_train: np.floating,
     ) -> np.ndarray:
         """
         Computes the row of column-wise means of a matrix for a given fold.
@@ -944,8 +925,8 @@ class CVMatrix:
         return sum_mat_train / sum_w_train
 
     def _compute_std_divisor(
-        self, sum_w_train: float, num_nonzero_w_train: int
-    ) -> float:
+        self, sum_w_train: np.floating, num_nonzero_w_train: np.floating
+    ) -> np.floating:
         """
         Computes the divisor for the standard deviation calculation based on the number
         of samples in the training set and the number of non-zero weights.
@@ -975,8 +956,8 @@ class CVMatrix:
         sum_sq_mat_train: np.ndarray,
         mat_train_mean: np.ndarray,
         sum_mat_train: np.ndarray,
-        sum_w_train: float,
-        divisor: float,
+        sum_w_train: np.floating,
+        divisor: np.floating,
     ) -> np.ndarray:
         """
         Computes the row of column-wise standard deviations of a matrix for a given
@@ -1014,7 +995,7 @@ class CVMatrix:
         ) / divisor
         mat_train_var[mat_train_var < 0] = 0
         mat_train_std = np.sqrt(mat_train_var)
-        mat_train_std[np.abs(mat_train_std) <= self.resolution] = 1
+        mat_train_std[mat_train_std <= self.resolution] = 1
         return mat_train_std
 
     def _init_mat(self, mat: np.ndarray) -> np.ndarray:
