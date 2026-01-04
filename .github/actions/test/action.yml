@@ -31,5 +31,5 @@ runs:
 
     - name: Run tests
       run: |
-        poetry run pytest tests --doctest-modules --junitxml=junit/test-results.xml --cov=cvmatrix/ --cov-report=xml --cov-report=html --typeguard-packages=cvmatrix/
+        poetry run pytest tests --doctest-modules --junitxml=junit/test-results.xml --cov=cvmatrix/ --cov-report=xml --typeguard-packages=cvmatrix/
       shell: bash

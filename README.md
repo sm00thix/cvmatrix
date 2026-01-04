@@ -14,13 +14,14 @@
 
 [![Tests Status](https://github.com/Sm00thix/CVMatrix/actions/workflows/test_workflow.yml/badge.svg)](https://github.com/Sm00thix/CVMatrix/actions/workflows/test_workflow.yml)
 
+[![Test Coverage](https://coveralls.io/repos/github/sm00thix/cvmatrix/badge.svg?branch=main)](https://coveralls.io/github/sm00thix/cvmatrix?branch=main)
+
 [![Package Status](https://github.com/Sm00thix/CVMatrix/actions/workflows/package_workflow.yml/badge.svg)](https://github.com/Sm00thix/CVMatrix/actions/workflows/package_workflow.yml)
 
 The [`cvmatrix`](https://pypi.org/project/cvmatrix/) package implements the fast cross-validation algorithms by Engstrøm and Jensen [[1]](#references) for computation of training set $\mathbf{X}^{\mathbf{T}}\mathbf{X}$ and $\mathbf{X}^{\mathbf{T}}\mathbf{Y}$ in a cross-validation setting. In addition to correctly handling arbitrary row-wise pre-processing, the algorithms allow for and efficiently and correctly handle any combination of column-wise centering and scaling of `X` and `Y` based on training set statistical moments.
 
 For an implementation of the fast cross-validation algorithms combined with Improved Kernel Partial Least Squares [[2]](#references), see the Python package [`ikpls`](https://pypi.org/project/ikpls/) by Engstrøm et al. [[3]](#references).
 
-## NEW IN 2.0.0: Weighted CVMatrix
 The `cvmatrix` software package now also features **weigthed matrix produts** $\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}$ **without increasing time or space complexity compared to the unweighted case**. This is due to a generalization of the algorithms by Engstrøm and Jensen [[1]](#references). A new article formally describing the generalization is to be announced.
 
 ## Installation
