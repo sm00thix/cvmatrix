@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "cvmatrix"
-version = "3.1.5"
+version = "3.1.6"
 description = "Fast computation of possibly weighted and possibly centered/scaled training set kernel matrices in a cross-validation setting."
 authors = ["Sm00thix <oleemail@icloud.com>"]
 maintainers = ["Sm00thix <oleemail@icloud.com>"]
@@ -25,8 +25,8 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 addopts = [
-    "--typeguard-packages=ikpls",
-    "--cov=ikpls",
+    "--typeguard-packages=cvmatrix",
+    "--cov=cvmatrix",
     "--cov-report=xml",
     "--cov-report=html",
     "--cov-report=term-missing",

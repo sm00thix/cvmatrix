@@ -1,17 +1,16 @@
-"""
+r"""
 This file demonstrates how to use CVMatrix to compute training set matrices
 :math:`\mathbf{X}^{\mathbf{T}}\mathbf{X}` and
 :math:`\mathbf{X}^{\mathbf{T}}\mathbf{Y}` with possible centering and scaling of
 `X` and `Y` using training set means and standard deviations.
 
 Author: Ole-Christian Galbo Engstrøm
-E-mail: ole.e@di.ku.dk
+E-mail: ocge@foss.dk
 """
 
 import numpy as np
 
-from cvmatrix.cvmatrix import CVMatrix
-from cvmatrix.partitioner import Partitioner
+from cvmatrix import CVMatrix, Partitioner
 
 if __name__ == "__main__":
     # Create some example data. X must have shape (N, K) or (N,) and Y must have shape

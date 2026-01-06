@@ -17,7 +17,7 @@ from numpy import typing as npt
 
 
 class CVMatrix:
-    """
+    r"""
     Implements the fast cross-validation algorithms for kernel matrix-based models such
     as PCA, PCR, PLS, and OLS. The algorithms are based on Algorithms 2-7 and all the
     extensions in Table 1 in the paper by O.-C. G. Engstrøm and M. H. Jensen:
@@ -117,7 +117,7 @@ class CVMatrix:
         Y: Optional[npt.ArrayLike] = None,
         weights: Optional[npt.ArrayLike] = None,
     ) -> None:
-        """
+        r"""
         Loads and stores `X`, `Y`, and "weights", for cross-validation. Computes
         dataset-wide :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` and, if `Y` is
         not `None`, :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`. If `center_X`,
@@ -239,7 +239,7 @@ class CVMatrix:
     ) -> Tuple[
         np.ndarray, Tuple[Optional[np.ndarray], Optional[np.ndarray], None, None]
     ]:
-        """
+        r"""
         Computes the training set :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`
         corresponding to every sample except those at the `validation_indices`. Also
         computes the row of column-wise weighted means for `X` and the row of
@@ -300,7 +300,7 @@ class CVMatrix:
             Optional[np.ndarray],
         ],
     ]:
-        """
+        r"""
         Computes the training set :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`
         corresponding to every sample except those at the `validation_indices`. Also
         computes the row of column-wise weighted means for `X`, the row of column-wise
@@ -366,7 +366,7 @@ class CVMatrix:
             Optional[np.ndarray],
         ],
     ]:
-        """
+        r"""
         Computes the training set :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`
         and :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}` corresponding to every
         sample except those at the `validation_indices`. Also computes the row of
@@ -644,7 +644,7 @@ class CVMatrix:
             Optional[np.ndarray],
         ],
     ]:
-        """
+        r"""
         Returns the training set :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`
         and/or :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}` The training
         set corresponds to every sample except those at the `validation_indices`.
@@ -834,7 +834,7 @@ class CVMatrix:
         sum_w_train: Optional[np.floating] = None,
         center: bool = False,
     ) -> np.ndarray:
-        """
+        r"""
         Computes the training set kernel matrix for a given fold.
 
         Parameters
@@ -959,7 +959,7 @@ class CVMatrix:
         sum_w_train: np.floating,
         divisor: np.floating,
     ) -> np.ndarray:
-        """
+        r"""
         Computes the row of column-wise standard deviations of a matrix for a given
         fold.
 
@@ -1077,7 +1077,7 @@ class CVMatrix:
                 self.WY = self.Y * self.weights
 
     def _init_matrix_products(self) -> None:
-        """
+        r"""
         Initializes the global matrix products `XTX` and `XTY` for the
         entire dataset. These are :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`
         and :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`, respectively.

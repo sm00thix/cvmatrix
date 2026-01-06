@@ -19,7 +19,7 @@ from cvmatrix.cvmatrix import CVMatrix
 
 
 class NaiveCVMatrix(CVMatrix):
-    """
+    r"""
     Implements the naive cross-validation algorithms for kernel matrix-based models such
     as PCA, PCR, PLS, and OLS. The algorithms are described in detail in the paper by
     O.-C. G. Engstrøm and M. H. Jensen:
