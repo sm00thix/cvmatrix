@@ -33,7 +33,7 @@ The `cvmatrix` software package now also features **weigthed matrix produts** $\
 
 - Now you can import the class implementing all the algorithms with:
     ```python
-    from cvmatrix.cvmatrix import CVMatrix
+    from cvmatrix import CVMatrix
     ```
 
 ## Quick Start
@@ -42,8 +42,8 @@ The `cvmatrix` software package now also features **weigthed matrix produts** $\
 
 > ```python
 > import numpy as np
-> from cvmatrix.cvmatrix import CVMatrix
-> from cvmatrix.partitioner import Partitioner
+> from cvmatrix import CVMatrix
+> from cvmatrix import Partitioner
 >
 > N = 100  # Number of samples.
 > K = 50  # Number of features.
