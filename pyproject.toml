@@ -1,27 +1,47 @@
-[tool.poetry]
+[project]
 name = "cvmatrix"
-version = "3.1.6"
+version = "3.2.0"
 description = "Fast computation of possibly weighted and possibly centered/scaled training set kernel matrices in a cross-validation setting."
-authors = ["Sm00thix <oleemail@icloud.com>"]
-maintainers = ["Sm00thix <oleemail@icloud.com>"]
+authors = [{ name = "Sm00thix", email = "oleemail@icloud.com" }]
+maintainers = [{ name = "Sm00thix", email = "oleemail@icloud.com" }]
 license = "Apache-2.0"
 readme = "README.md"
-homepage = "https://cvmatrix.readthedocs.io/en/latest/"
-repository = "https://github.com/Sm00thix/CVMatrix"
+requires-python = ">=3.11, <3.15"
 classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
 ]
+dependencies = [
+    "numpy>=2.0.0,<3.0.0",
+]
 
-[tool.poetry.dependencies]
-python = ">=3.11, <3.15"
-numpy = "^2.0.0"
+[project.optional-dependencies]
+# Optional JAX backend (backend="jax"): enables tracing the per-fold training-matrix
+# computations under jax.jit/jax.vmap on CPU/GPU/TPU. Install with `cvmatrix[jax]`.
+jax = ["jax>=0.4.0"]
+
+[project.urls]
+Homepage = "https://cvmatrix.readthedocs.io/en/latest/"
+Repository = "https://github.com/Sm00thix/CVMatrix"
+
+# Development/test-only dependencies (PEP 735). Installed by `uv sync`.
+[dependency-groups]
+dev = [
+    "pandas",
+    "pytest",
+    "pytest-cov",
+    "typeguard",
+    "ruff",
+]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["cvmatrix"]
 
 [tool.pytest.ini_options]
 addopts = [

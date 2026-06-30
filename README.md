@@ -36,6 +36,54 @@ The `cvmatrix` software package now also features **weigthed matrix produts** $\
     from cvmatrix import CVMatrix
     ```
 
+- You can also install the optional JAX dependency to enable the JAX backend of
+  `CVMatrix`:
+    ```shell
+    pip3 install "cvmatrix[jax]"
+    ```
+- Now, you can select the JAX backend by passing `backend="jax"` to the constructor:
+    ```python
+    from cvmatrix import CVMatrix
+
+    cvm = CVMatrix(
+        center_X=True, center_Y=True, scale_X=True, scale_Y=True, backend="jax"
+    )
+    ```
+  With `backend="jax"`, the per-fold training-matrix computations (`training_XTX`,
+  `training_XTY`, `training_XTX_XTY`, and `training_statistics`) use `jax.numpy` and can
+  be traced by `jax.jit` and batched over folds with `jax.vmap` on CPUs, GPUs, and TPUs.
+  The default `backend="numpy"` is unchanged and remains byte-for-byte identical to
+  previous releases.
+
+### Prerequisites for the JAX backend
+
+The JAX backend supports running on CPU, GPU, and TPU.
+
+- To enable NVIDIA GPU execution, install JAX and CUDA with:
+    ```shell
+    pip3 install -U "jax[cuda13]"
+    ```
+
+- To enable Google Cloud TPU execution, install JAX with:
+    ```shell
+    pip3 install -U "jax[tpu]"
+    ```
+
+These are typical installation instructions that will be what most users are looking for.
+For customized installations, follow the instructions from the [JAX Installation
+Guide](https://jax.readthedocs.io/en/latest/installation.html).
+
+To ensure that the JAX backend uses float64, set the environment variable
+```JAX_ENABLE_X64=True``` as per the [Common
+Gotchas](https://docs.jax.dev/en/latest/notebooks/Common_Gotchas_in_JAX.html#double-64bit-precision).
+`CVMatrix` also enables this automatically when constructed with `backend="jax"` and a
+64-bit `dtype` (the default). Alternatively, float64 can be enabled with the following
+function call:
+```python
+import jax
+jax.config.update("jax_enable_x64", True)
+```
+
 ## Quick Start
 
 ### Use the cvmatrix package for fast computation of training set kernel matrices
@@ -96,6 +144,7 @@ The `cvmatrix` software package now also features **weigthed matrix produts** $\
 In [examples](https://github.com/Sm00thix/CVMatrix/tree/main/examples), you will find:
 
 - [Compute training matrices with CVMatrix](https://github.com/Sm00thix/CVMatrix/tree/main/examples/training_matrices.py)
+- [Compute training matrices with the JAX backend, batched over folds with `jax.vmap` on CPU/GPU/TPU](https://github.com/Sm00thix/CVMatrix/tree/main/examples/training_matrices_jax.py)
 
 ## Benchmarks
 
@@ -105,6 +154,14 @@ In [benchmarks](https://github.com/Sm00thix/CVMatrix/tree/main/benchmarks), we h
    <img src="https://github.com/Sm00thix/CVMatrix/blob/main/benchmarks/benchmark_cvmatrix_vs_naive.png" width="400" height="400" /> <img src="https://github.com/Sm00thix/CVMatrix/blob/main/benchmarks/benchmark_cvmatrix.png" width="400" height="400"/>
    <br>
    <em> <strong>Left:</strong> Benchmarking cross-validation with the CVMatrix implementation versus the baseline implementation using three common combinations of (column-wise) centering and scaling. <strong>Right:</strong> Benchmarking cross-validation with the CVMatrix implementation for all possible combinations of (column-wise) centering and scaling. Here, most of the graphs lie on top of eachother. In general, no preprocessing is faster than centering which, in turn, is faster than scaling. </em>
+</p>
+
+The figures below add the optional JAX backend to the comparison (NumPy vs. JAX, and the JAX execution modes). They are measured **multi-threaded** (no thread limit; GPU on an NVIDIA RTX 3090 Ti) and **exclude `NaiveCVMatrix`**:
+
+<p align=center>
+   <img src="https://github.com/Sm00thix/CVMatrix/blob/main/benchmarks/benchmark_cvmatrix_numpy_vs_jax.png" width="400" height="400" /> <img src="https://github.com/Sm00thix/CVMatrix/blob/main/benchmarks/benchmark_jax_variants.png" width="400" height="400"/>
+   <br>
+   <em> <strong>Left:</strong> CVMatrix with the NumPy backend versus the JAX backend (warm, JIT-compiled <code>jax.vmap</code> over folds) on CPU and GPU, for the three common preprocessing combinations. <strong>Right:</strong> The JAX backend under no-JIT (eager <code>vmap</code>), cold-JIT (compilation + run) and warm-JIT (run only), on CPU and GPU. JIT compilation is a large fixed cost: on the GPU, no-JIT beats cold-JIT for a single run, whereas on the CPU, JIT (even cold) is far faster than eager <code>vmap</code> at a large number of folds. </em>
 </p>
 
 ## Contribute

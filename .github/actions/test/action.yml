@@ -5,31 +5,33 @@ inputs:
   PYTHON_VERSION:
     description: Test Python version
     required: true
+  INSTALL_JAX:
+    description: Whether to install the optional JAX backend extra (true/false)
+    required: false
+    default: 'true'
 
 runs:
   using: "composite"
   steps:
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
       with:
         python-version: ${{ inputs.PYTHON_VERSION }}
 
-    - name: Install Poetry
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install poetry
+    - name: Install project dependencies (with JAX backend)
+      if: ${{ inputs.INSTALL_JAX == 'true' }}
+      run: uv sync --extra jax --group dev
       shell: bash
 
-    - name: Install project dependencies
-      run: poetry install
+    - name: Install project dependencies (numpy-only, without JAX)
+      if: ${{ inputs.INSTALL_JAX != 'true' }}
+      run: uv sync --group dev
       shell: bash
 
-    - name: Install additional dependencies for testing
-      run: |
-        poetry add --group dev pandas pytest flake8 pytest-cov typeguard
-      shell: bash
-
+    # The same test suite runs in both modes. With the JAX backend installed it also
+    # exercises the parametrized backend="jax" tests; without JAX those parametrizations
+    # are skipped (pytest.importorskip), verifying the numpy-only path.
     - name: Run tests
       run: |
-        poetry run pytest tests --doctest-modules --junitxml=junit/test-results.xml --cov=cvmatrix/ --cov-report=xml --typeguard-packages=cvmatrix/
+        uv run pytest tests --doctest-modules --junitxml=junit/test-results.xml --cov=cvmatrix/ --cov-report=xml --typeguard-packages=cvmatrix/
       shell: bash

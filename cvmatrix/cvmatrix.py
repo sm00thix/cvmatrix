@@ -10,10 +10,83 @@ Author: Ole-Christian Galbo Engstrøm
 E-mail: ocge@foss.dk
 """
 
-from typing import Optional, Tuple, Union
+from typing import TYPE_CHECKING, Literal, Optional, Tuple, Union
 
 import numpy as np
 from numpy import typing as npt
+
+try:
+    # Broaden the array/scalar type hints so that, with backend="jax", jax.numpy values
+    # (which are jax.Array instances, including under jit/vmap tracing) satisfy runtime
+    # type checking. numpy remains the only required dependency; this is skipped if jax
+    # is not installed, leaving the hints numpy-only.
+    import jax as _jax
+
+    Array = Union[np.ndarray, _jax.Array]
+    Scalar = Union[np.floating, _jax.Array, float, int]
+    # float dtype types accepted by `dtype`: numpy float types (`type[np.floating]`) and
+    # JAX scalar dtypes. The latter (e.g. jnp.float64/float32/bfloat16) are instances of
+    # JAX's scalar-type metaclass -- NOT numpy.floating subclasses -- so they must be
+    # admitted via that metaclass.
+    _JaxScalarMeta = type(_jax.numpy.float64)
+    FloatDType = Union[type[np.floating], _JaxScalarMeta]
+    # Abstract values produced while a function is traced by jax.jit/jax.vmap. Used to
+    # skip data-dependent validity raises that cannot run under tracing (the host-side
+    # caller is expected to validate folds before vmap); eager (concrete) jax values are
+    # NOT tracers, so they still validate like the numpy backend.
+    _TRACER_TYPES: tuple = (_jax.core.Tracer,)
+except ImportError:  # pragma: no cover - exercised only without jax
+    Array = np.ndarray
+    Scalar = Union[np.floating, float, int]
+    FloatDType = type[np.floating]
+    _TRACER_TYPES = ()
+
+if TYPE_CHECKING:
+    # JAX's scalar-dtype metaclass (`type(jnp.float64)`) has no public *static* type, so
+    # the precise runtime `FloatDType` union above is built from a value (`_JaxScalarMeta`)
+    # that static type checkers reject in a type expression ("variables are not allowed in
+    # type expressions"). For static analysis only, expose numpy's standard dtype-specifier
+    # alias, which cleanly accepts both numpy float types and JAX scalar dtypes. At run
+    # time `TYPE_CHECKING` is False, so typeguard still validates against the precise union.
+    FloatDType = npt.DTypeLike
+
+
+def _resolve_backend(backend: str):
+    """
+    Resolve the array-namespace module for a given backend name.
+
+    Parameters
+    ----------
+    backend : {"numpy", "jax"}
+        The array backend to use. ``"numpy"`` uses ``numpy`` (the default and only
+        required dependency). ``"jax"`` uses ``jax.numpy`` so that the per-fold training
+        matrix computations can run inside ``jax.jit``/``jax.vmap`` on CPU/GPU/TPU; it
+        requires the optional ``jax`` dependency (``pip install cvmatrix[jax]``).
+
+    Returns
+    -------
+    module
+        The resolved array namespace (``numpy`` or ``jax.numpy``).
+
+    Raises
+    ------
+    ValueError
+        If ``backend`` is not ``"numpy"`` or ``"jax"``.
+    ImportError
+        If ``backend == "jax"`` but JAX is not installed.
+    """
+    if backend == "numpy":
+        return np
+    if backend == "jax":
+        try:
+            import jax.numpy as jnp
+        except ImportError as e:  # pragma: no cover - exercised only without jax
+            raise ImportError(
+                "backend='jax' requires the optional JAX dependency. Install it with "
+                "`pip install cvmatrix[jax]`."
+            ) from e
+        return jnp
+    raise ValueError(f"Invalid backend: {backend!r}. Must be 'numpy' or 'jax'.")
 
 
 class CVMatrix:
@@ -81,8 +154,9 @@ class CVMatrix:
         scale_X: bool = True,
         scale_Y: bool = True,
         ddof: int = 1,
-        dtype: type[np.floating] = np.float64,
+        dtype: FloatDType = np.float64,
         copy: bool = True,
+        backend: Literal["numpy", "jax"] = "numpy",
     ) -> None:
         self.center_X = center_X
         self.center_Y = center_Y
@@ -91,6 +165,18 @@ class CVMatrix:
         self.ddof = ddof
         self.dtype = dtype.type if isinstance(dtype, np.dtype) else dtype
         self.copy = copy
+        self.backend = backend
+        # Array namespace: numpy (default) or jax.numpy. All array operations are routed
+        # through `self.xp` so that, with backend="jax", the per-fold `training_*`
+        # methods can be traced by jax.jit/jax.vmap. The numpy backend is byte-identical
+        # to previous releases.
+        self.xp = _resolve_backend(backend)
+        if backend == "jax" and np.dtype(self.dtype).itemsize >= 8:
+            # JAX defaults to 32-bit; enable 64-bit precision so a requested float64
+            # dtype is honored instead of being silently truncated to float32.
+            import jax
+
+            jax.config.update("jax_enable_x64", True)
         self.resolution = np.finfo(dtype).resolution * 10
         self.X = None
         self.Y = None
@@ -139,10 +225,10 @@ class CVMatrix:
 
         Attributes
         ----------
-        X : np.ndarray
+        X : Array
             The total predictor matrix `X` for the entire dataset.
 
-        Y : np.ndarray or None
+        Y : Array or None
             The total response matrix `Y` for the entire dataset. If `Y` is `None`, this is
             `None`.
 
@@ -155,60 +241,60 @@ class CVMatrix:
         M : int or None
             The number of response variables in `Y`. If `Y` is `None`, this is `None`.
 
-        XTX : np.ndarray
+        XTX : Array
             The total matrix :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` for the
             entire dataset.
 
-        XTY : np.ndarray or None
+        XTY : Array or None
             The total matrix :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}` for the
             entire dataset. This is computed only if `Y` is not `None`.
 
-        sum_X : np.ndarray or None
+        sum_X : Array or None
             The row of column-wise weighted sums of `X` for the entire dataset. This is
             computed only if `center_X`, `scale_X`, or `center_Y` is `True`. This is the
             row of column-wise sums of :math:`\mathbf{W}\mathbf{X}` if `weights` are
             provided and otherwise the row of column-wise sums of :math:`\mathbf{X}`.
 
-        sum_Y : np.ndarray or None
+        sum_Y : Array or None
             The row of column-wise weighted sums of `Y` for the entire dataset. This is
             computed only if `center_Y`, `scale_Y`, or `center_X` is `True` and `Y` is not
             `None`. This is the row of column-wise sums of :math:`\mathbf{W}\mathbf{Y}` if
             `weights` are provided and otherwise the row of column-wise sums of
             :math:`\mathbf{Y}`.
 
-        sum_sq_X : np.ndarray or None
+        sum_sq_X : Array or None
             The row of column-wise weighted squared sums of `X` for the entire dataset.
             This is computed only if `scale_X` is `True`. This is the
             row of column-wise sums of :math:`\mathbf{W}\mathbf{X}\odot\mathbf{X}` if
             `weights` are provided and otherwise the row of column-wise sums of
             :math:`\mathbf{X}\odot\mathbf{X}`.
 
-        sum_sq_Y : np.ndarray or None
+        sum_sq_Y : Array or None
             The row of column-wise weighted squared sums of `Y` for the entire dataset.
             This is computed only if `scale_Y` is `True` and `Y` is not `None`. This is the
             row of column-wise sums of :math:`\mathbf{W}\mathbf{Y}\odot\mathbf{Y}` if
             `weights` are provided and otherwise the row of column-wise sums of
             :math:`\mathbf{Y}\odot\mathbf{Y}`.
 
-        sq_X : np.ndarray or None
+        sq_X : Array or None
             The total weighted squared predictor matrix `X` for the entire dataset. This is
             :math:`\mathbf{W}\mathbf{X}\odot\mathbf{X}`. This is computed only if
             `scale_X` is `True`.
 
-        sq_Y : np.ndarray or None
+        sq_Y : Array or None
             The total weighted squared response matrix `Y` for the entire dataset. This is
             :math:`\mathbf{W}\mathbf{Y}\odot\mathbf{Y}`. This is computed only if
             `scale_Y` is `True` and `Y` is not `None`.
 
-        WX : np.ndarray or None
+        WX : Array or None
             The total weighted predictor matrix `X` for the entire dataset. This is
             :math:`\mathbf{W}\mathbf{X}`.
 
-        WY : np.ndarray or None
+        WY : Array or None
             The total weighted response matrix `Y` for the entire dataset. This is
             :math:`\mathbf{W}\mathbf{Y}`. This is computed only if `Y` is not `None`.
 
-        weights : np.ndarray or None
+        weights : Array or None
             The total weights for the entire dataset. This is an array of shape (N, 1). If
             `weights` is `None`, this is `None`.
 
@@ -237,7 +323,7 @@ class CVMatrix:
     def training_XTX(
         self, validation_indices: npt.NDArray[np.int_]
     ) -> Tuple[
-        np.ndarray, Tuple[Optional[np.ndarray], Optional[np.ndarray], None, None]
+        Array, Tuple[Optional[Array], Optional[Array], None, None]
     ]:
         r"""
         Computes the training set :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`
@@ -292,12 +378,12 @@ class CVMatrix:
     def training_XTY(
         self, validation_indices: npt.NDArray[np.int_]
     ) -> Tuple[
-        np.ndarray,
+        Array,
         Tuple[
-            Optional[np.ndarray],
-            Optional[np.ndarray],
-            Optional[np.ndarray],
-            Optional[np.ndarray],
+            Optional[Array],
+            Optional[Array],
+            Optional[Array],
+            Optional[Array],
         ],
     ]:
         r"""
@@ -358,12 +444,12 @@ class CVMatrix:
     def training_XTX_XTY(
         self, validation_indices: npt.NDArray[np.int_]
     ) -> Tuple[
-        Tuple[np.ndarray, np.ndarray],
+        Tuple[Array, Array],
         Tuple[
-            Optional[np.ndarray],
-            Optional[np.ndarray],
-            Optional[np.ndarray],
-            Optional[np.ndarray],
+            Optional[Array],
+            Optional[Array],
+            Optional[Array],
+            Optional[Array],
         ],
     ]:
         r"""
@@ -426,10 +512,10 @@ class CVMatrix:
     def training_statistics(
         self, validation_indices: npt.NDArray[np.int_]
     ) -> Tuple[
-        Optional[np.ndarray],
-        Optional[np.ndarray],
-        Optional[np.ndarray],
-        Optional[np.ndarray],
+        Optional[Array],
+        Optional[Array],
+        Optional[Array],
+        Optional[Array],
     ]:
         """
         Computes the row of column-wise weighted means and standard deviations for `X`
@@ -448,7 +534,7 @@ class CVMatrix:
 
         Returns
         -------
-        Tuple of four elements of Optional[np.ndarray]
+        Tuple of four elements of Optional[Array]
             A tuple containing the row of column-wise weighted means for `X`, the row
             of column-wise weighted standard deviations for `X`, the row of column-wise
             weighted means for `Y`, and the row of column-wise weighted standard
@@ -480,9 +566,22 @@ class CVMatrix:
             return_Y_std=self.scale_Y and self.Y is not None,
         )[:-1]  # Exclude the sum of training weights from the return tuple
 
+    def _as_scalar(self, x):
+        """
+        Cast a scalar-valued result to the configured dtype.
+
+        For the numpy backend this returns a NumPy scalar (preserving the historical
+        ``np.floating`` return types and byte-identical behavior). For the jax backend
+        it returns the value unchanged (already a ``jax.numpy`` value of the right
+        dtype), keeping the per-fold path trace-safe.
+        """
+        if self.backend == "numpy":
+            return self.dtype(x)
+        return x
+
     def _get_sum_w_train_and_num_nonzero_w_train(
         self, val_indices: npt.NDArray[np.int_]
-    ) -> Tuple[np.floating, np.floating]:
+    ) -> Tuple[Scalar, Scalar]:
         """
         Returns a tuple containing the sum of weights in the training set and the number
         of non-zero weights in the training set. If `self.weights` is `None`, it returns
@@ -502,16 +601,21 @@ class CVMatrix:
             make it impossible to compute either of training set means or standard
             deviations.
         """
+        xp = self.xp
         if self.weights is None:
             sum_w_val = val_indices.size
-            sum_w_train = self.dtype(self.sum_w - sum_w_val)
+            sum_w_train = self._as_scalar(self.sum_w - sum_w_val)
             return (sum_w_train, sum_w_train)
         w_val = self.weights[val_indices]
-        sum_w_val = np.sum(w_val)
-        sum_w_train = self.dtype(self.sum_w - sum_w_val)
-        num_nonzero_w_val = np.count_nonzero(w_val)
-        num_nonzero_w_train = self.dtype(self.num_nonzero_w - num_nonzero_w_val)
-        if num_nonzero_w_train == 0:
+        sum_w_val = xp.sum(w_val)
+        sum_w_train = self._as_scalar(self.sum_w - sum_w_val)
+        num_nonzero_w_val = xp.count_nonzero(w_val)
+        num_nonzero_w_train = self._as_scalar(self.num_nonzero_w - num_nonzero_w_val)
+        # Validate eagerly (numpy, or concrete/eager jax). Under jax.jit/vmap tracing the
+        # input `val_indices` is a tracer (in both the weighted and unweighted paths), so
+        # we skip the data-dependent raise; degenerate folds are then expected to be
+        # rejected by a host-side pre-flight before vmap.
+        if not isinstance(val_indices, _TRACER_TYPES) and num_nonzero_w_train == 0:
             raise ValueError(
                 "The number of non-zero weights in the training set must be "
                 "greater than zero."
@@ -521,18 +625,18 @@ class CVMatrix:
     def _compute_training_stats(
         self,
         val_indices: npt.NDArray[np.int_],
-        X_val: Optional[np.ndarray],
-        Y_val: Optional[np.ndarray],
+        X_val: Optional[Array],
+        Y_val: Optional[Array],
         return_X_mean: bool,
         return_X_std: bool,
         return_Y_mean: bool,
         return_Y_std: bool,
     ) -> Tuple[
-        Optional[np.ndarray],
-        Optional[np.ndarray],
-        Optional[np.ndarray],
-        Optional[np.ndarray],
-        Optional[np.floating],
+        Optional[Array],
+        Optional[Array],
+        Optional[Array],
+        Optional[Array],
+        Optional[Scalar],
     ]:
         """
         Computes the training set statistics. The training set corresponds
@@ -572,7 +676,7 @@ class CVMatrix:
 
         Returns
         -------
-        Tuple of Optional[np.ndarray]
+        Tuple of Optional[Array]
             A tuple containing the row of column-wise weighted means for `X`, the row
             of column-wise weighted standard deviations for `X`, the row of column-wise
             weighted means for `Y`, the row of column-wise weighted standard deviations
@@ -586,27 +690,34 @@ class CVMatrix:
             and not return_Y_std
         ):
             return None, None, None, None, None
+        # Under jax.jit/vmap, `val_indices` is a tracer; data-dependent validity raises
+        # are then deferred to a host-side pre-flight (see `_get_sum_w_train_*` and
+        # `_compute_std_divisor`). The unweighted path derives its counts from static
+        # shapes, so it cannot rely on the count itself being a tracer.
+        traced = isinstance(val_indices, _TRACER_TYPES)
         sum_w_train, num_nonzero_w_train = (
             self._get_sum_w_train_and_num_nonzero_w_train(val_indices)
         )
         if return_X_mean or return_X_std:
-            sum_X_val = np.sum(X_val, axis=0, keepdims=True)
+            sum_X_val = self.xp.sum(X_val, axis=0, keepdims=True)
             sum_X_train = self._compute_train_mat_sum(sum_X_val, self.sum_X)
             X_train_mean = self._compute_training_mat_mean(
                 sum_X_train,
                 sum_w_train,
             )
         if return_Y_mean or return_Y_std:
-            sum_Y_val = np.sum(Y_val, axis=0, keepdims=True)
+            sum_Y_val = self.xp.sum(Y_val, axis=0, keepdims=True)
             sum_Y_train = self._compute_train_mat_sum(sum_Y_val, self.sum_Y)
             Y_train_mean = self._compute_training_mat_mean(
                 sum_Y_train,
                 sum_w_train,
             )
         if return_X_std or return_Y_std:
-            divisor = self._compute_std_divisor(sum_w_train, num_nonzero_w_train)
+            divisor = self._compute_std_divisor(
+                sum_w_train, num_nonzero_w_train, traced
+            )
         if return_X_std:
-            sum_sq_X_val = np.sum(self.sq_X[val_indices], axis=0, keepdims=True)
+            sum_sq_X_val = self.xp.sum(self.sq_X[val_indices], axis=0, keepdims=True)
             sum_sq_X_train = self._compute_train_mat_sum(sum_sq_X_val, self.sum_sq_X)
             X_train_std = self._compute_training_mat_std(
                 sum_sq_X_train,
@@ -616,7 +727,7 @@ class CVMatrix:
                 divisor,
             )
         if return_Y_std:
-            sum_sq_Y_val = np.sum(self.sq_Y[val_indices], axis=0, keepdims=True)
+            sum_sq_Y_val = self.xp.sum(self.sq_Y[val_indices], axis=0, keepdims=True)
             sum_sq_Y_train = self._compute_train_mat_sum(sum_sq_Y_val, self.sum_sq_Y)
             Y_train_std = self._compute_training_mat_std(
                 sum_sq_Y_train,
@@ -636,12 +747,12 @@ class CVMatrix:
     def _training_matrices(
         self, return_XTX: bool, return_XTY: bool, val_indices: npt.NDArray[np.int_]
     ) -> Tuple[
-        Union[np.ndarray, Tuple[np.ndarray, np.ndarray]],
+        Union[Array, Tuple[Array, Array]],
         Tuple[
-            Optional[np.ndarray],
-            Optional[np.ndarray],
-            Optional[np.ndarray],
-            Optional[np.ndarray],
+            Optional[Array],
+            Optional[Array],
+            Optional[Array],
+            Optional[Array],
         ],
     ]:
         r"""
@@ -780,10 +891,10 @@ class CVMatrix:
     def _get_val_matrices(
         self, val_indices: npt.NDArray[np.int_], return_XTY: bool
     ) -> Tuple[
-        np.ndarray,
-        np.ndarray,
-        Optional[np.ndarray],
-        Optional[np.ndarray],
+        Array,
+        Array,
+        Optional[Array],
+        Optional[Array],
     ]:
         """
         Returns the validation set matrices for a given fold.
@@ -824,16 +935,16 @@ class CVMatrix:
 
     def _training_kernel_matrix(
         self,
-        total_kernel_mat: np.ndarray,
-        X_val: np.ndarray,
-        mat2_val: np.ndarray,
-        X_train_mean: Optional[np.ndarray] = None,
-        mat2_train_mean: Optional[np.ndarray] = None,
-        X_train_std: Optional[np.ndarray] = None,
-        mat2_train_std: Optional[np.ndarray] = None,
-        sum_w_train: Optional[np.floating] = None,
+        total_kernel_mat: Array,
+        X_val: Array,
+        mat2_val: Array,
+        X_train_mean: Optional[Array] = None,
+        mat2_train_mean: Optional[Array] = None,
+        X_train_std: Optional[Array] = None,
+        mat2_train_std: Optional[Array] = None,
+        sum_w_train: Optional[Scalar] = None,
         center: bool = False,
-    ) -> np.ndarray:
+    ) -> Array:
         r"""
         Computes the training set kernel matrix for a given fold.
 
@@ -893,9 +1004,9 @@ class CVMatrix:
 
     def _compute_train_mat_sum(
         self,
-        sum_mat_val: np.ndarray,
-        sum_mat: np.ndarray,
-    ) -> np.ndarray:
+        sum_mat_val: Array,
+        sum_mat: Array,
+    ) -> Array:
         """
         Computes the row vector of column-wise sums of a matrix for a given fold.
         """
@@ -903,9 +1014,9 @@ class CVMatrix:
 
     def _compute_training_mat_mean(
         self,
-        sum_mat_train: np.ndarray,
-        sum_w_train: np.floating,
-    ) -> np.ndarray:
+        sum_mat_train: Array,
+        sum_w_train: Scalar,
+    ) -> Array:
         """
         Computes the row of column-wise means of a matrix for a given fold.
 
@@ -925,8 +1036,8 @@ class CVMatrix:
         return sum_mat_train / sum_w_train
 
     def _compute_std_divisor(
-        self, sum_w_train: np.floating, num_nonzero_w_train: np.floating
-    ) -> np.floating:
+        self, sum_w_train: Scalar, num_nonzero_w_train: Scalar, traced: bool = False
+    ) -> Scalar:
         """
         Computes the divisor for the standard deviation calculation based on the number
         of samples in the training set and the number of non-zero weights.
@@ -939,12 +1050,21 @@ class CVMatrix:
         num_nonzero_w_train : int
             The number of non-zero weights in the training set.
 
+        traced : bool, default=False
+            Whether the computation is being traced by jax.jit/jax.vmap. When True, the
+            data-dependent degenerate-fold check is skipped (deferred to a host-side
+            pre-flight); a non-positive divisor then degrades gracefully via the clamp in
+            `_compute_training_mat_std`.
+
         Returns
         -------
         float
             The divisor for the standard deviation calculation.
         """
-        if num_nonzero_w_train <= self.ddof:
+        # Validate eagerly (numpy, or concrete/eager jax). Under jax.jit/vmap tracing
+        # (`traced`, detected from the input `val_indices`) the check is deferred to a
+        # host-side pre-flight before vmap.
+        if not traced and num_nonzero_w_train <= self.ddof:
             raise ValueError(
                 "The number of non-zero weights in the training set must be greater "
                 "than `ddof`."
@@ -953,12 +1073,12 @@ class CVMatrix:
 
     def _compute_training_mat_std(
         self,
-        sum_sq_mat_train: np.ndarray,
-        mat_train_mean: np.ndarray,
-        sum_mat_train: np.ndarray,
-        sum_w_train: np.floating,
-        divisor: np.floating,
-    ) -> np.ndarray:
+        sum_sq_mat_train: Array,
+        mat_train_mean: Array,
+        sum_mat_train: Array,
+        sum_w_train: Scalar,
+        divisor: Scalar,
+    ) -> Array:
         r"""
         Computes the row of column-wise standard deviations of a matrix for a given
         fold.
@@ -988,17 +1108,20 @@ class CVMatrix:
         Array of shape (1, K) or (1, M)
             The row of column-wise standard deviations of the training set matrix.
         """
+        xp = self.xp
         mat_train_var = (
             -2 * mat_train_mean * sum_mat_train
             + sum_w_train * mat_train_mean**2
             + sum_sq_mat_train
         ) / divisor
-        mat_train_var[mat_train_var < 0] = 0
-        mat_train_std = np.sqrt(mat_train_var)
-        mat_train_std[mat_train_std <= self.resolution] = 1
+        # `xp.maximum`/`xp.where` instead of boolean-mask in-place assignment: identical
+        # results for numpy and trace-safe for jax (jit/vmap).
+        mat_train_var = xp.maximum(mat_train_var, 0)
+        mat_train_std = xp.sqrt(mat_train_var)
+        mat_train_std = xp.where(mat_train_std <= self.resolution, 1, mat_train_std)
         return mat_train_std
 
-    def _init_mat(self, mat: np.ndarray) -> np.ndarray:
+    def _init_mat(self, mat: Array) -> Array:
         """
         Casts the matrix to the dtype specified in the constructor and reshapes it if
         the matrix is one-dimensional.
@@ -1013,7 +1136,7 @@ class CVMatrix:
         Array of shape (N, K) or (N, M) or (N, 1)
             The initialized matrix.
         """
-        mat = np.asarray(mat, dtype=self.dtype)
+        mat = self.xp.asarray(mat, dtype=self.dtype)
         if self.copy and mat.dtype == self.dtype:
             mat = mat.copy()
         if mat.ndim == 1:
@@ -1055,7 +1178,7 @@ class CVMatrix:
 
         if weights is not None:
             self.weights = self._init_mat(weights)
-            if np.any(self.weights < 0):
+            if bool(self.xp.any(self.weights < 0)):
                 raise ValueError("Weights must be non-negative.")
         else:
             self.weights = None
@@ -1092,22 +1215,22 @@ class CVMatrix:
         """
         if self.center_X or self.center_Y or self.scale_X or self.scale_Y:
             if self.weights is not None:
-                self.sum_w = np.sum(self.weights)
-                self.num_nonzero_w = np.count_nonzero(self.weights)
+                self.sum_w = self.xp.sum(self.weights)
+                self.num_nonzero_w = self.xp.count_nonzero(self.weights)
             else:
                 self.sum_w = self.N
                 self.num_nonzero_w = self.N
         if self.center_X or self.center_Y or self.scale_X:
-            self.sum_X = np.sum(self.WX, axis=0, keepdims=True)
+            self.sum_X = self.xp.sum(self.WX, axis=0, keepdims=True)
         if (self.center_X or self.center_Y or self.scale_Y) and self.Y is not None:
-            self.sum_Y = np.sum(self.WY, axis=0, keepdims=True)
+            self.sum_Y = self.xp.sum(self.WY, axis=0, keepdims=True)
         if self.scale_X:
             self.sq_X = self.WX * self.X
-            self.sum_sq_X = np.sum(self.sq_X, axis=0, keepdims=True)
+            self.sum_sq_X = self.xp.sum(self.sq_X, axis=0, keepdims=True)
         else:
             self.sum_sq_X = None
         if self.scale_Y and self.Y is not None:
             self.sq_Y = self.WY * self.Y
-            self.sum_sq_Y = np.sum(self.sq_Y, axis=0, keepdims=True)
+            self.sum_sq_Y = self.xp.sum(self.sq_Y, axis=0, keepdims=True)
         else:
             self.sum_sq_Y = None
