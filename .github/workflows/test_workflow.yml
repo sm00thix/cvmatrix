@@ -33,6 +33,7 @@ jobs:
                 path-to-lcov: coverage.xml
                 flag-name: ${{ matrix.os }}-python-${{ matrix.python-version }}-jax
                 parallel: true
+                fail-on-error: false
 
     # Numpy-only installation (without JAX); backend="jax" tests are skipped
     test_package_numpy_only:
@@ -56,6 +57,7 @@ jobs:
                 path-to-lcov: coverage.xml
                 flag-name: ${{ matrix.os }}-python-${{ matrix.python-version }}-numpy-only
                 parallel: true
+                fail-on-error: false
 
     finish:
         needs: [test_package_with_jax, test_package_numpy_only]
@@ -66,3 +68,4 @@ jobs:
               with:
                 github-token: ${{ secrets.GITHUB_TOKEN }}
                 parallel-finished: true
+                fail-on-error: false
