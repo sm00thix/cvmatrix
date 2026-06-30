@@ -59,6 +59,18 @@ class TestClass:
     # ones_weights = ones_weights[indices]
     # random_weights = random_weights[indices]
 
+    @pytest.fixture(params=["numpy", "jax"], autouse=True)
+    def _set_backend(self, request):
+        """
+        Run every test with both the "numpy" and "jax" CVMatrix backends. The jax
+        parametrization is skipped if JAX is not installed. `fit_fast` builds the
+        CVMatrix model with `backend=self.backend`, so all equivalence and behavior
+        tests exercise both backends.
+        """
+        if request.param == "jax":
+            pytest.importorskip("jax")
+        self.backend = request.param
+
     def load_X(self) -> npt.NDArray[np.float64]:
         """
         Loads the raw spectral data.
@@ -286,7 +298,10 @@ class TestClass:
             made. If `True` a copy is always made. If no copy is made, then external
             modifications to `X` or `Y` will result in undefined behavior.
         """
-        fast = CVMatrix(center_X, center_Y, scale_X, scale_Y, ddof, dtype, copy)
+        fast = CVMatrix(
+            center_X, center_Y, scale_X, scale_Y, ddof, dtype, copy,
+            backend=getattr(self, "backend", "numpy"),
+        )
         fast.fit(X, Y, weights)
         return fast
 
@@ -558,6 +573,114 @@ class TestClass:
                 np.float64,
             )
             self.check_equivalent_matrices(naive, fast, p)
+
+    def test_jax_backend_requires_jax(self, monkeypatch):
+        """
+        Tests that requesting backend="jax" raises ImportError with an install hint when
+        JAX is not installed. JAX absence is simulated by hiding it from `sys.modules`,
+        so this test is valid regardless of whether JAX is installed in the environment.
+        """
+        monkeypatch.setitem(sys.modules, "jax", None)
+        monkeypatch.setitem(sys.modules, "jax.numpy", None)
+        with pytest.raises(ImportError, match="cvmatrix\\[jax\\]"):
+            CVMatrix(backend="jax")
+
+    def test_invalid_backend(self):
+        """
+        Tests that an unknown backend string raises ValueError (the sibling of the
+        ImportError path tested in `test_jax_backend_requires_jax`). Exercised via
+        `_resolve_backend` directly: the constructor's `Literal["numpy", "jax"]` hint is
+        intercepted by typeguard before the ValueError is reached, whereas
+        `_resolve_backend(backend: str)` accepts the str and reaches the real check.
+        """
+        from cvmatrix.cvmatrix import _resolve_backend
+
+        with pytest.raises(ValueError, match="Invalid backend"):
+            _resolve_backend("torch")
+
+    def test_jax_jit_vmap_matches_numpy(self):
+        """
+        Exercises the JAX backend under jax.jit + jax.vmap (the headline feature and the
+        trace-safety machinery: the deferred degenerate-fold checks and the xp.maximum/
+        xp.where standard-deviation clamp all run under tracing here). Batches the per-
+        fold training_XTX_XTY over equal-size folds with jax.vmap and checks the results
+        match the eager numpy backend, for both unweighted and weighted folds. The
+        unweighted case specifically covers the path where the training-set count is a
+        static int rather than a tracer.
+        """
+        if getattr(self, "backend", "numpy") != "jax":
+            pytest.skip("JAX-specific trace test; runs under the jax parametrization.")
+        pytest.importorskip("jax")
+        import jax
+        import jax.numpy as jnp
+
+        X = self.load_X()[:, :20]
+        Y = self.load_Y(["Protein", "Moisture"])
+        # Equal-size folds so jax.vmap sees a fixed (n_folds, fold_size) index batch.
+        n_folds = 5
+        n = (X.shape[0] // n_folds) * n_folds
+        X, Y = X[:n], Y[:n]
+        folds = np.arange(n) % n_folds
+        p = Partitioner(folds)
+        val_index_batch = jnp.asarray(
+            np.stack([p.get_validation_indices(f) for f in p.folds_dict])
+        )
+
+        for weights in (None, self.load_weights(random=True)[:n]):
+            cvm_jax = CVMatrix(
+                center_X=True, center_Y=True, scale_X=True, scale_Y=True,
+                ddof=1, backend="jax",
+            )
+            cvm_jax.fit(X, Y, weights)
+            cvm_np = CVMatrix(
+                center_X=True, center_Y=True, scale_X=True, scale_Y=True,
+                ddof=1, backend="numpy",
+            )
+            cvm_np.fit(X, Y, weights)
+            (XTWX_b, XTWY_b), (Xm_b, Xs_b, Ym_b, Ys_b) = jax.jit(
+                jax.vmap(cvm_jax.training_XTX_XTY)
+            )(val_index_batch)
+            for i, fold in enumerate(p.folds_dict):
+                (XTWX, XTWY), (Xm, Xs, Ym, Ys) = cvm_np.training_XTX_XTY(
+                    p.get_validation_indices(fold)
+                )
+                assert_allclose(np.asarray(XTWX_b[i]), XTWX, atol=1e-8, rtol=1e-8)
+                assert_allclose(np.asarray(XTWY_b[i]), XTWY, atol=1e-8, rtol=1e-8)
+                assert_allclose(np.asarray(Xm_b[i]), Xm, atol=1e-8, rtol=1e-8)
+                assert_allclose(np.asarray(Xs_b[i]), Xs, atol=1e-8, rtol=1e-8)
+                assert_allclose(np.asarray(Ym_b[i]), Ym, atol=1e-8, rtol=1e-8)
+                assert_allclose(np.asarray(Ys_b[i]), Ys, atol=1e-8, rtol=1e-8)
+
+    def test_jax_trace_defers_degenerate_check(self):
+        """
+        Under jax.jit/jax.vmap, the data-dependent degenerate-fold ValueError must be
+        skipped (deferred to a host-side pre-flight); eager execution must still raise.
+        This guards the UNWEIGHTED path specifically, where the training-set count is a
+        static int (not a tracer) and so the skip must key on the input `val_indices`
+        being a tracer rather than on the count.
+        """
+        if getattr(self, "backend", "numpy") != "jax":
+            pytest.skip("JAX-specific trace test; runs under the jax parametrization.")
+        pytest.importorskip("jax")
+        import jax
+        import jax.numpy as jnp
+
+        X = self.load_X()[:6, :4]
+        Y = self.load_Y(["Protein"])[:6]
+        cvm = CVMatrix(
+            center_X=True, center_Y=True, scale_X=True, scale_Y=True,
+            ddof=1, backend="jax",
+        )
+        cvm.fit(X, Y, None)  # unweighted
+        # A degenerate fold: validating on 5 of 6 rows leaves 1 training sample (<= ddof).
+        degenerate_val = np.arange(5)
+        # Eager (concrete) execution validates and raises.
+        with pytest.raises(ValueError, match="greater than `ddof`"):
+            cvm.training_XTX_XTY(degenerate_val)
+        # Under jit, val_indices is a tracer: the check is deferred, so tracing must
+        # complete without raising (the degenerate std degrades via the clamp).
+        (XTWX, _), _ = jax.jit(cvm.training_XTX_XTY)(jnp.asarray(degenerate_val))
+        assert XTWX.shape == (4, 4)
 
     def test_naive_hadamard_vs_matmul(self):
         """
@@ -1026,6 +1149,11 @@ class TestClass:
         Tests that different dtypes can be used and that the output preserves the
         dtype.
         """
+        if getattr(self, "backend", "numpy") == "jax":
+            pytest.skip(
+                "NumPy-specific dtype coverage (incl. float16/float128); the jax backend "
+                "supports only float32/float64."
+            )
         X = np.array([1, 2, 3, 4, 5])
         Y = np.array([5, 4, 3, 2, 1])
         folds = np.array([0, 0, 1, 1, 2])
@@ -1080,6 +1208,11 @@ class TestClass:
         """
         Tests that the copy parameter works as expected.
         """
+        if getattr(self, "backend", "numpy") == "jax":
+            pytest.skip(
+                "`copy`/`np.shares_memory` are NumPy-specific; the jax backend always "
+                "transfers inputs to device arrays."
+            )
         dtype = np.float64
         X = np.array([1, 2, 3, 4, 5]).astype(dtype)
         Y = np.array([5, 4, 3, 2, 1]).astype(dtype)

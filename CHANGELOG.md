@@ -5,7 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [4.0.0] - 2025
+## [3.2.0] - 2026-06-29
+
+### Added
+- Optional **JAX backend** for `CVMatrix` via `backend="jax"` (a `Literal["numpy", "jax"]`; default remains `"numpy"`). All array operations are routed through a resolved array namespace (`numpy` or `jax.numpy`), so the per-fold `training_XTX`/`training_XTY`/`training_XTX_XTY`/`training_statistics` computations can be traced by `jax.jit` and batched with `jax.vmap` on CPU/GPU/TPU. Install with `cvmatrix[jax]`.
+- Backend-neutral, trace-safe standard-deviation clamping (`maximum`/`where` instead of boolean-mask assignment). Degenerate-fold validation (`ValueError`s) still fires for eager (numpy or concrete jax) execution; under `jax.jit`/`jax.vmap` tracing the check is deferred to a host-side pre-flight by the caller.
+
+### Changed
+- Switched build and development tooling from Poetry to [uv](https://docs.astral.sh/uv/): the project now uses PEP 621 `[project]` metadata, the `hatchling` build backend, and a PEP 735 `[dependency-groups]` dev group (`poetry.lock` is replaced by `uv.lock`). The published package, its runtime dependencies, and the `jax` extra are unchanged.
+
+### Notes
+- The numpy backend is byte-identical to previous releases (verified against the existing test suite) and performance-neutral.
+
+## [3.1.6] - 2025
 ### Changed
 - `CVMatrix` and `Partitioner` can now be imported with `from cvmatrix import CVMatrix, Partitioner` or `import cvmatrix` followed by `cvmatrix.CVMatrix` and `cvmatrix.Partitioner`.
 
