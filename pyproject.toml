@@ -1,6 +1,6 @@
 [project]
 name = "cvmatrix"
-version = "3.2.0"
+version = "3.2.1"
 description = "Fast computation of possibly weighted and possibly centered/scaled training set kernel matrices in a cross-validation setting."
 authors = [{ name = "Sm00thix", email = "oleemail@icloud.com" }]
 maintainers = [{ name = "Sm00thix", email = "oleemail@icloud.com" }]

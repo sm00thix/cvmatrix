@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.1] - 2026-07-01
+
+### Changed
+- `import cvmatrix` no longer imports JAX, even when JAX is installed. JAX was previously imported at module load time to broaden the array/scalar type hints so that `backend="jax"` values satisfy runtime type checking; it is now imported lazily, only when the JAX backend is actually resolved (`backend="jax"`). The array/scalar type aliases start NumPy-only and are broadened in-place to also admit `jax.Array` the first time the JAX backend is used (annotations are deferred via `from __future__ import annotations`, so `typeguard` resolves them against the broadened aliases at call time). This keeps NumPy-only import paths — and downstream packages that use only the NumPy backend — free of the JAX import cost. The `numpy` and `jax` backends are behavior- and result-identical to 3.2.0.
+
 ## [3.2.0] - 2026-06-29
 
 ### Added
