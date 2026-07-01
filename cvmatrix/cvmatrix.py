@@ -10,45 +10,49 @@ Author: Ole-Christian Galbo Engstrøm
 E-mail: ocge@foss.dk
 """
 
-from typing import TYPE_CHECKING, Literal, Optional, Tuple, Union
+from __future__ import annotations
+
+from typing import Literal, Optional, Tuple, Union
 
 import numpy as np
 from numpy import typing as npt
 
-try:
-    # Broaden the array/scalar type hints so that, with backend="jax", jax.numpy values
-    # (which are jax.Array instances, including under jit/vmap tracing) satisfy runtime
-    # type checking. numpy remains the only required dependency; this is skipped if jax
-    # is not installed, leaving the hints numpy-only.
-    import jax as _jax
+# Array/scalar type aliases. NumPy is the only required dependency, so JAX is NEVER
+# imported at module load -- ``import cvmatrix`` stays JAX-free even when JAX is
+# installed. The aliases are numpy-only by default and are broadened in-place to
+# also admit ``jax.Array`` values by ``_enable_jax_typing()``, which runs the first
+# time the JAX backend is resolved. Because ``from __future__ import annotations``
+# keeps annotations as strings, typeguard resolves them against the *current* module
+# globals at call time, so the broadened unions take effect once JAX is in use.
+Array = np.ndarray
+Scalar = Union[np.floating, float, int]
+# ``dtype`` specifier: ``npt.DTypeLike`` cleanly admits both numpy float types and
+# JAX scalar dtypes (e.g. ``jnp.float64``) without importing JAX.
+FloatDType = npt.DTypeLike
+# Abstract values produced while a function is traced by jax.jit/jax.vmap. Used to
+# skip data-dependent validity raises that cannot run under tracing (the host-side
+# caller is expected to validate folds before vmap). Empty until the JAX backend is
+# used, so the numpy backend's isinstance checks are always False (numpy values are
+# never tracers); eager (concrete) jax values are NOT tracers, so they still
+# validate like the numpy backend.
+_TRACER_TYPES: tuple = ()
 
-    Array = Union[np.ndarray, _jax.Array]
-    Scalar = Union[np.floating, _jax.Array, float, int]
-    # float dtype types accepted by `dtype`: numpy float types (`type[np.floating]`) and
-    # JAX scalar dtypes. The latter (e.g. jnp.float64/float32/bfloat16) are instances of
-    # JAX's scalar-type metaclass -- NOT numpy.floating subclasses -- so they must be
-    # admitted via that metaclass.
-    _JaxScalarMeta = type(_jax.numpy.float64)
-    FloatDType = Union[type[np.floating], _JaxScalarMeta]
-    # Abstract values produced while a function is traced by jax.jit/jax.vmap. Used to
-    # skip data-dependent validity raises that cannot run under tracing (the host-side
-    # caller is expected to validate folds before vmap); eager (concrete) jax values are
-    # NOT tracers, so they still validate like the numpy backend.
-    _TRACER_TYPES: tuple = (_jax.core.Tracer,)
-except ImportError:  # pragma: no cover - exercised only without jax
-    Array = np.ndarray
-    Scalar = Union[np.floating, float, int]
-    FloatDType = type[np.floating]
-    _TRACER_TYPES = ()
 
-if TYPE_CHECKING:
-    # JAX's scalar-dtype metaclass (`type(jnp.float64)`) has no public *static* type, so
-    # the precise runtime `FloatDType` union above is built from a value (`_JaxScalarMeta`)
-    # that static type checkers reject in a type expression ("variables are not allowed in
-    # type expressions"). For static analysis only, expose numpy's standard dtype-specifier
-    # alias, which cleanly accepts both numpy float types and JAX scalar dtypes. At run
-    # time `TYPE_CHECKING` is False, so typeguard still validates against the precise union.
-    FloatDType = npt.DTypeLike
+def _enable_jax_typing() -> None:
+    """Broaden the array/scalar aliases and tracer types to admit JAX values.
+
+    Called (idempotently) when the JAX backend is resolved. Kept out of module
+    import so that ``import cvmatrix`` never imports JAX. Because
+    ``from __future__ import annotations`` keeps annotations as strings, typeguard
+    resolves annotations against these (now broadened) module globals at call time,
+    so ``jax.Array`` values pass the runtime type checks once JAX is in use.
+    """
+    import jax
+
+    global Array, Scalar, _TRACER_TYPES
+    Array = Union[np.ndarray, jax.Array]
+    Scalar = Union[np.floating, jax.Array, float, int]
+    _TRACER_TYPES = (jax.core.Tracer,)
 
 
 def _resolve_backend(backend: str):
@@ -85,6 +89,9 @@ def _resolve_backend(backend: str):
                 "backend='jax' requires the optional JAX dependency. Install it with "
                 "`pip install cvmatrix[jax]`."
             ) from e
+        # Broaden the array/scalar type aliases to admit jax.Array now that JAX is
+        # in use (kept out of module import so importing cvmatrix stays JAX-free).
+        _enable_jax_typing()
         return jnp
     raise ValueError(f"Invalid backend: {backend!r}. Must be 'numpy' or 'jax'.")
 
