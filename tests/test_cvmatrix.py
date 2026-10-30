@@ -817,7 +817,10 @@ class TestClass:
         fast = CVMatrix(backend=self.backend, compute_XTX=False)
         fast.fit(X, Y, weights)
         XTY, stats = fast.training_XTY(val_indices)
-        for clone in (pickle.loads(pickle.dumps(fast)), deepcopy(fast)):
+        # Only bytes pickled by this test itself are unpickled, so Bandit's B301
+        # concern about deserializing untrusted data does not apply.
+        unpickled = pickle.loads(pickle.dumps(fast))  # nosec B301
+        for clone in (unpickled, deepcopy(fast)):
             assert type(clone) is CVMatrix
             assert clone.xp is fast.xp
             assert clone.XTX is None and not clone.compute_XTX
