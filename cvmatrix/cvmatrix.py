@@ -100,6 +100,37 @@ def _resolve_backend(backend: str):
     raise ValueError(f"Invalid backend: {backend!r}. Must be 'numpy' or 'jax'.")
 
 
+def _reconstruct(cls: type, backend: str, dtype: FloatDType) -> CVMatrix:
+    """
+    Creates an empty instance of `cls`, a `CVMatrix` or a subclass, with its array
+    backend set up. Used by `CVMatrix.__reduce__` for unpickling: pickle calls it before
+    restoring the pickled arrays, so that, with the jax backend and a 64-bit `dtype`,
+    JAX's 64-bit mode is enabled before the arrays are rebuilt. Otherwise, float64
+    arrays would silently become float32 in a fresh process, e.g., a worker process.
+
+    Parameters
+    ----------
+    cls : type
+        The class of the pickled instance.
+
+    backend : {"numpy", "jax"}
+        The array backend of the pickled instance.
+
+    dtype : type[np.floating]
+        The data type of the pickled instance.
+
+    Returns
+    -------
+    CVMatrix
+        An instance of `cls` with `backend`, `dtype`, and `xp` set.
+    """
+    obj = cls.__new__(cls)
+    obj.backend = backend
+    obj.dtype = dtype
+    obj._init_backend()
+    return obj
+
+
 class CVMatrix:
     r"""
     Implements the fast cross-validation algorithms for kernel matrix-based models such
@@ -156,6 +187,31 @@ class CVMatrix:
         input arrays are not NumPy arrays of type `dtype`, then a copy is made. If
         `True` a copy is always made. If no copy is made, then external modifications
         to `X` or `Y` will result in undefined behavior.
+
+    backend : {"numpy", "jax"}, optional, default="numpy"
+        The array backend used for the computations. `"numpy"` uses NumPy, which is
+        the only required dependency. `"jax"` uses `jax.numpy` so that the per-fold
+        computations of `training_XTX`, `training_XTY`, `training_XTX_XTY`, and
+        `training_statistics` can be traced by `jax.jit` and batched over folds with
+        `jax.vmap` on CPU, GPU, or TPU. It requires the optional JAX dependency, which
+        is installed with `pip install cvmatrix[jax]`; otherwise, an `ImportError` is
+        raised. If `"jax"` is used with a 64-bit `dtype`, JAX's 64-bit mode
+        (`jax_enable_x64`) is enabled globally so that `dtype` is honored instead of
+        being truncated to 32 bits.
+
+    compute_XTX : bool, optional, default=True
+        Whether `fit` computes the dataset-wide
+        :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`. Its cost grows with the
+        square of the number of predictor variables in `X`, so for wide `X` it can
+        dominate `fit`. Set this to `False` if neither `training_XTX` nor
+        `training_XTX_XTY` will be called. If `False`, these methods raise a
+        `ValueError`.
+
+    compute_XTY : bool, optional, default=True
+        Whether `fit` computes the dataset-wide
+        :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}` when `Y` is provided. Set
+        this to `False` if neither `training_XTY` nor `training_XTX_XTY` will be
+        called. If `False`, these methods raise a `ValueError`.
     """
 
     def __init__(
@@ -168,6 +224,8 @@ class CVMatrix:
         dtype: FloatDType = np.float64,
         copy: bool = True,
         backend: Literal["numpy", "jax"] = "numpy",
+        compute_XTX: bool = True,
+        compute_XTY: bool = True,
     ) -> None:
         self.center_X = center_X
         self.center_Y = center_Y
@@ -176,18 +234,10 @@ class CVMatrix:
         self.ddof = ddof
         self.dtype = dtype.type if isinstance(dtype, np.dtype) else dtype
         self.copy = copy
+        self.compute_XTX = compute_XTX
+        self.compute_XTY = compute_XTY
         self.backend = backend
-        # Array namespace: numpy (default) or jax.numpy. All array operations are routed
-        # through `self.xp` so that, with backend="jax", the per-fold `training_*`
-        # methods can be traced by jax.jit/jax.vmap. The numpy backend is byte-identical
-        # to previous releases.
-        self.xp = _resolve_backend(backend)
-        if backend == "jax" and np.dtype(self.dtype).itemsize >= 8:
-            # JAX defaults to 32-bit; enable 64-bit precision so a requested float64
-            # dtype is honored instead of being silently truncated to float32.
-            import jax
-
-            jax.config.update("jax_enable_x64", True)
+        self._init_backend()
         self.resolution = np.finfo(dtype).resolution * 10
         self.X = None
         self.Y = None
@@ -208,6 +258,18 @@ class CVMatrix:
         self.sum_w = None
         self.num_nonzero_w = None
 
+    def __reduce__(self) -> tuple:
+        """
+        Supports pickling with the standard library, e.g., to send a fitted `CVMatrix`
+        to worker processes with `multiprocessing` or
+        `concurrent.futures.ProcessPoolExecutor`. The array namespace `xp` is a module,
+        which cannot be pickled, so it is left out of the pickled state and resolved
+        again from `backend` by `_reconstruct` before the state is restored.
+        """
+        state = self.__dict__.copy()
+        del state["xp"]
+        return _reconstruct, (type(self), self.backend, self.dtype), state
+
     def fit(
         self,
         X: npt.ArrayLike,
@@ -216,8 +278,9 @@ class CVMatrix:
     ) -> None:
         r"""
         Loads and stores `X`, `Y`, and "weights", for cross-validation. Computes
-        dataset-wide :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` and, if `Y` is
-        not `None`, :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`. If `center_X`,
+        dataset-wide :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` if
+        `compute_XTX` is `True` and, if `Y` is not `None` and `compute_XTY` is `True`,
+        :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`. If `center_X`,
         `center_Y`, `scale_X`, or `scale_Y` is `True`, the corresponding global
         statistics are also computed.
 
@@ -252,13 +315,14 @@ class CVMatrix:
         M : int or None
             The number of response variables in `Y`. If `Y` is `None`, this is `None`.
 
-        XTX : Array
+        XTX : Array or None
             The total matrix :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` for the
-            entire dataset.
+            entire dataset. This is computed only if `compute_XTX` is `True`.
 
         XTY : Array or None
             The total matrix :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}` for the
-            entire dataset. This is computed only if `Y` is not `None`.
+            entire dataset. This is computed only if `Y` is not `None` and
+            `compute_XTY` is `True`.
 
         sum_X : Array or None
             The row of column-wise weighted sums of `X` for the entire dataset. This is
@@ -362,6 +426,7 @@ class CVMatrix:
         Raises
         ------
         ValueError
+            - If `fit` did not compute `XTX` because `compute_XTX` was `False`.
             - If `self.center_X` or `self.scale_X` is `True` but cannot be computed due
                 to the training set having no non-zero weights.
             - If `self.scale_X` is `True` and the corresponding weighted standard
@@ -426,6 +491,7 @@ class CVMatrix:
         ------
         ValueError
             - If `Y` is `None`.
+            - If `fit` did not compute `XTY` because `compute_XTY` was `False`.
             - If `self.center_X`, `self.center_Y`, `self.scale_X`, or `self.scale_Y` is
                 `True` and the corresponding weighted means and standard deviations
                 cannot be computed due to the training set having no non-zero
@@ -496,6 +562,8 @@ class CVMatrix:
         ------
         ValueError
             - If `Y` is `None`.
+            - If `fit` did not compute `XTX` because `compute_XTX` was `False`.
+            - If `fit` did not compute `XTY` because `compute_XTY` was `False`.
             - If `self.center_X`, `self.center_Y`, `self.scale_X`, or `self.scale_Y` is
                 `True` and the corresponding weighted means and standard deviations
                 cannot be computed due to the training set having no non-zero
@@ -562,16 +630,22 @@ class CVMatrix:
                 set.
 
         """
-        X_val, X_val_unweighted, Y_val, Y_val_unweighted = self._get_val_matrices(
-            val_indices=validation_indices, return_XTY=self.Y is not None
+        return_X_mean = self.center_X or self.scale_X
+        return_Y_mean = (self.center_Y or self.scale_Y) and self.Y is not None
+        X_val, _, Y_val, _ = self._get_val_matrices(
+            val_indices=validation_indices,
+            return_X_val=return_X_mean,
+            return_X_val_unweighted=False,
+            return_Y_val=return_Y_mean,
+            return_Y_val_unweighted=False,
         )
         return self._compute_training_stats(
             val_indices=validation_indices,
             X_val=X_val,
             Y_val=Y_val,
-            return_X_mean=self.center_X or self.scale_X,
+            return_X_mean=return_X_mean,
             return_X_std=self.scale_X,
-            return_Y_mean=(self.center_Y or self.scale_Y) and self.Y is not None,
+            return_Y_mean=return_Y_mean,
             return_Y_std=self.scale_Y and self.Y is not None,
         )[:-1]  # Exclude the sum of training weights from the return tuple
 
@@ -775,11 +849,11 @@ class CVMatrix:
             Whether to return the training set
             :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`.
 
-        return_XTY : bool, optional, default=False
+        return_XTY : bool
             Whether to return the training set
             :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`.
 
-        validation_indices : IndexArray
+        val_indices : IndexArray
             An integer array of indices for the validation set for which to
             return the corresponding training set
             :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}` and
@@ -802,8 +876,10 @@ class CVMatrix:
         Raises
         ------
         ValueError
-            If both `return_XTX` and `return_XTY` are `False` or if `return_XTY` is
-            `True` and `Y` is `None`.
+            If both `return_XTX` and `return_XTY` are `False`, if `return_XTY` is
+            `True` and `Y` is `None`, if `return_XTX` is `True` and `fit` did not
+            compute `XTX` because `compute_XTX` was `False`, or if `return_XTY` is
+            `True` and `fit` did not compute `XTY` because `compute_XTY` was `False`.
         """
         if not return_XTX and not return_XTY:
             raise ValueError(
@@ -811,8 +887,28 @@ class CVMatrix:
             )
         if return_XTY and self.Y is None:
             raise ValueError("Response variables `Y` are not provided.")
+        # Check the fitted products rather than the flags, so that the flags cannot
+        # disagree with what `fit` actually computed.
+        if return_XTX and self.XTX is None:
+            raise ValueError(
+                "`XTX` was not computed by `fit`. Fit a CVMatrix constructed with "
+                "`compute_XTX=True` to use `training_XTX` or `training_XTX_XTY`."
+            )
+        if return_XTY and self.XTY is None:
+            raise ValueError(
+                "`XTY` was not computed by `fit`. Fit a CVMatrix constructed with "
+                "`compute_XTY=True` to use `training_XTY` or `training_XTX_XTY`."
+            )
+        # The weighted `Y_val` feeds the weighted mean and standard deviation of `Y`,
+        # which centering (`center_X` or `center_Y`) and scaling (`scale_Y`) of `XTY`
+        # use.
+        return_Y_val = return_XTY and self._needs_Y_stats
         X_val, X_val_unweighted, Y_val, Y_val_unweighted = self._get_val_matrices(
-            val_indices=val_indices, return_XTY=return_XTY
+            val_indices=val_indices,
+            return_X_val=True,
+            return_X_val_unweighted=return_XTX,
+            return_Y_val=return_Y_val,
+            return_Y_val_unweighted=return_XTY,
         )
         X_train_mean, X_train_std, Y_train_mean, Y_train_std, sum_w_train = (
             self._compute_training_stats(
@@ -822,11 +918,7 @@ class CVMatrix:
                     if self.center_X or self.scale_X or (return_XTY and self.center_Y)
                     else None
                 ),
-                Y_val=(
-                    Y_val
-                    if return_XTY and (self.center_X or self.center_Y or self.scale_Y)
-                    else None
-                ),
+                Y_val=Y_val,
                 return_X_mean=self.center_X or (return_XTY and self.center_Y),
                 return_Y_mean=return_XTY and (self.center_X or self.center_Y),
                 return_X_std=self.scale_X,
@@ -898,49 +990,105 @@ class CVMatrix:
         )
 
     def _get_val_matrices(
-        self, val_indices: IndexArray, return_XTY: bool
+        self,
+        val_indices: IndexArray,
+        *,
+        return_X_val: bool,
+        return_X_val_unweighted: bool,
+        return_Y_val: bool,
+        return_Y_val_unweighted: bool,
     ) -> Tuple[
-        Array,
-        Array,
+        Optional[Array],
+        Optional[Array],
         Optional[Array],
         Optional[Array],
     ]:
         """
-        Returns the validation set matrices for a given fold.
+        Returns the requested validation set matrices for a given fold. Only the
+        requested matrices are gathered, as gathering the validation set rows is a
+        significant part of the cost of each fold.
+
         Parameters
         ----------
         val_indices : Array of shape (N_val,)
             The indices of the validation set samples for the given fold.
-        return_XTY : bool
-            Whether to return the validation set of response variables `Y`. If `False`,
-            the returned `Y_val` and `Y_val_unweighted` will be `None`.
+
+        return_X_val : bool
+            Whether to return the validation set of weighted predictor variables.
+
+        return_X_val_unweighted : bool
+            Whether to return the validation set of unweighted predictor variables.
+
+        return_Y_val : bool
+            Whether to return the validation set of response variables, weighted if
+            `WY` is computed and unweighted otherwise.
+
+        return_Y_val_unweighted : bool
+            Whether to return the validation set of unweighted response variables.
+
         Returns
         -------
-        Tuple of arrays of shapes (N_val, K), (N_val, K), (N_val, M), and (N_val, M)
-            The validation set of predictor variables `X`, the validation set of
-            unweighted predictor variables `X_unweighted`, the validation set of
-            response variables `Y`, and the validation set of unweighted response
-            variables `Y_unweighted`. If `return_XTY` is `False`, `Y` and
-            `Y_unweighted` will be `None`.
+        Tuple of four elements of Optional[Array]
+            The validation sets of predictor variables `X_val` of shape (N_val, K),
+            unweighted predictor variables `X_val_unweighted` of shape (N_val, K),
+            response variables `Y_val` of shape (N_val, M), and unweighted response
+            variables `Y_val_unweighted` of shape (N_val, M). A matrix that is not
+            requested is `None`.
         """
-        X_val = self.WX[val_indices]
-        if self.weights is None:
-            X_val_unweighted = X_val
+        X_val, X_val_unweighted = self._gather_val_pair(
+            val_indices, self.WX, self.X, return_X_val, return_X_val_unweighted
+        )
+        if self.weights is None or not self._needs_Y_stats:
+            Y_maybe_weighted = self.Y
         else:
-            X_val_unweighted = self.X[val_indices]
-        if return_XTY:
-            if self.weights is None or not (
-                self.center_X or self.center_Y or self.scale_Y
-            ):
-                Y_val = self.Y[val_indices]
-                Y_val_unweighted = Y_val
-            else:
-                Y_val = self.WY[val_indices]
-                Y_val_unweighted = self.Y[val_indices]
-        else:
-            Y_val = None
-            Y_val_unweighted = None
+            Y_maybe_weighted = self.WY
+        Y_val, Y_val_unweighted = self._gather_val_pair(
+            val_indices, Y_maybe_weighted, self.Y, return_Y_val, return_Y_val_unweighted
+        )
         return X_val, X_val_unweighted, Y_val, Y_val_unweighted
+
+    @staticmethod
+    def _gather_val_pair(
+        val_indices: IndexArray,
+        mat: Optional[Array],
+        mat_unweighted: Optional[Array],
+        return_val: bool,
+        return_val_unweighted: bool,
+    ) -> Tuple[Optional[Array], Optional[Array]]:
+        """
+        Gathers the requested validation set rows of a possibly weighted matrix and of
+        its unweighted counterpart. If both are requested and they are the same array
+        (e.g., if no weights are used), the rows are gathered only once.
+
+        Parameters
+        ----------
+        val_indices : Array of shape (N_val,)
+            The indices of the validation set samples for the given fold.
+
+        mat : None or Array of shape (N, K) or (N, M)
+            The possibly weighted matrix, `WX` or `WY`.
+
+        mat_unweighted : None or Array of shape (N, K) or (N, M)
+            The unweighted matrix, `X` or `Y`.
+
+        return_val : bool
+            Whether to return the validation set rows of `mat`.
+
+        return_val_unweighted : bool
+            Whether to return the validation set rows of `mat_unweighted`.
+
+        Returns
+        -------
+        Tuple of two elements of Optional[Array]
+            The validation set rows of `mat` and of `mat_unweighted`. A matrix that is
+            not requested is `None`.
+        """
+        mat_val = mat[val_indices] if return_val else None
+        if not return_val_unweighted:
+            return mat_val, None
+        if mat_val is not None and mat is mat_unweighted:
+            return mat_val, mat_val
+        return mat_val, mat_unweighted[val_indices]
 
     def _training_kernel_matrix(
         self,
@@ -1130,6 +1278,21 @@ class CVMatrix:
         mat_train_std = xp.where(mat_train_std <= self.resolution, 1, mat_train_std)
         return mat_train_std
 
+    def _init_backend(self) -> None:
+        """
+        Resolves the array namespace `xp` from `backend`: numpy (the default) or
+        jax.numpy. All array operations are routed through `xp` so that, with the jax
+        backend, the per-fold `training_*` methods can be traced by jax.jit/jax.vmap.
+        The numpy backend is byte-identical to previous releases. JAX defaults to 32
+        bits, so with the jax backend and a 64-bit `dtype`, JAX's 64-bit mode is enabled
+        so that `dtype` is honored instead of being silently truncated to float32.
+        """
+        self.xp = _resolve_backend(self.backend)
+        if self.backend == "jax" and np.dtype(self.dtype).itemsize >= 8:
+            import jax
+
+            jax.config.update("jax_enable_x64", True)
+
     def _init_mat(self, mat: Array) -> Array:
         """
         Casts the matrix to the dtype specified in the constructor and reshapes it if
@@ -1192,35 +1355,55 @@ class CVMatrix:
         else:
             self.weights = None
 
+    @property
+    def _needs_Y_stats(self) -> bool:
+        r"""
+        Whether the training set :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`
+        uses the weighted statistics of `Y`: the row of column-wise weighted means for
+        centering (`center_X` or `center_Y`) and, additionally, the row of column-wise
+        weighted standard deviations for scaling (`scale_Y`). Only then are `WY` (with
+        weights) and `sum_Y` computed and the weighted validation set rows of `Y`
+        gathered.
+        """
+        return self.center_X or self.center_Y or self.scale_Y
+
     def _init_weighted_mats(self):
         """
-        Initializes the weighted matrices `WX` and `WY` if weights are
-        provided. These matrices are computed as the product of the original matrices
-        `X` and `Y` with the `weights`. If `Y` is `None`, then `WY` is not initialized.
-        If `w` is `None`, then this method does nothing.
+        Initializes the weighted matrices `WX` and `WY`. Without weights, they are `X`
+        and `Y` themselves. With weights, they are computed as the product of `X` and
+        `Y` with the `weights`, where `WY` is computed only if `Y` is not `None` and its
+        weighted statistics are needed (see `_needs_Y_stats`). If `WY` is not
+        computed, it is set to `None` so that no `WY` from a previous fit is kept.
         """
         if self.weights is None:
             self.WX = self.X
-            if self.Y is not None:
-                self.WY = self.Y
+            self.WY = self.Y
         else:
             self.WX = self.X * self.weights
-            if self.Y is not None and (self.center_X or self.center_Y or self.scale_Y):
+            if self.Y is not None and self._needs_Y_stats:
                 self.WY = self.Y * self.weights
+            else:
+                self.WY = None
 
     def _init_matrix_products(self) -> None:
         r"""
         Initializes the global matrix products `XTX` and `XTY` for the
         entire dataset. These are :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{X}`
-        and :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`, respectively.
+        and :math:`\mathbf{X}^{\mathbf{T}}\mathbf{W}\mathbf{Y}`, respectively. A product
+        that is not computed, due to `compute_XTX` or `compute_XTY` being `False` or
+        `Y` being `None`, is set to `None`.
         """
-        self.XTX = self.WX.T @ self.X
-        if self.Y is not None:
+        self.XTX = self.WX.T @ self.X if self.compute_XTX else None
+        if self.compute_XTY and self.Y is not None:
             self.XTY = self.WX.T @ self.Y
+        else:
+            self.XTY = None
 
     def _init_stats(self) -> None:
         """
-        Initializes the global statistics for `X` and `Y`.
+        Initializes the global statistics for `X` and `Y`. The statistics of `Y` and
+        the squared matrices that are not computed are set to `None` so that none from
+        a previous fit are kept.
         """
         if self.center_X or self.center_Y or self.scale_X or self.scale_Y:
             if self.weights is not None:
@@ -1231,15 +1414,19 @@ class CVMatrix:
                 self.num_nonzero_w = self.N
         if self.center_X or self.center_Y or self.scale_X:
             self.sum_X = self.xp.sum(self.WX, axis=0, keepdims=True)
-        if (self.center_X or self.center_Y or self.scale_Y) and self.Y is not None:
+        if self._needs_Y_stats and self.Y is not None:
             self.sum_Y = self.xp.sum(self.WY, axis=0, keepdims=True)
+        else:
+            self.sum_Y = None
         if self.scale_X:
             self.sq_X = self.WX * self.X
             self.sum_sq_X = self.xp.sum(self.sq_X, axis=0, keepdims=True)
         else:
+            self.sq_X = None
             self.sum_sq_X = None
         if self.scale_Y and self.Y is not None:
             self.sq_Y = self.WY * self.Y
             self.sum_sq_Y = self.xp.sum(self.sq_Y, axis=0, keepdims=True)
         else:
+            self.sq_Y = None
             self.sum_sq_Y = None

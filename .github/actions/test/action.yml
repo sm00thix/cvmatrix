@@ -28,6 +28,26 @@ runs:
       run: uv sync --group dev
       shell: bash
 
+    # On free-threaded Python (e.g. 3.15t), importing an extension module that does not
+    # support free threading silently re-enables the GIL, and the tests would then pass
+    # without exercising free threading. Fail if any test dependency re-enables it.
+    - name: Check that the GIL stays disabled (free-threaded Python only)
+      if: ${{ endsWith(inputs.PYTHON_VERSION, 't') }}
+      run: |
+        uv run python - <<'EOF'
+        import importlib.util
+        import sys
+
+        import coverage, cvmatrix, numpy, pandas, pytest, typeguard  # noqa: E401, F401
+
+        if importlib.util.find_spec("jax") is not None:
+            import jax.numpy  # noqa: F401
+        if sys._is_gil_enabled():
+            sys.exit("The GIL was re-enabled by an imported extension module.")
+        print("The GIL stays disabled with all test dependencies imported.")
+        EOF
+      shell: bash
+
     # The same test suite runs in both modes. With the JAX backend installed it also
     # exercises the parametrized backend="jax" tests; without JAX those parametrizations
     # are skipped (pytest.importorskip), verifying the numpy-only path.

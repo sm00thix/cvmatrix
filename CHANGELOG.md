@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0] - 2026-10-30
+
+### Added
+- `compute_XTX` and `compute_XTY` constructor parameters (both default `True`, the previous behavior) that control whether `fit` computes the dataset-wide `XTX` (`X^T W X`) and `XTY` (`X^T W Y`). A product that is never used can now be skipped: e.g., `compute_XTX=False` avoids the O(NK²) time and K² memory of `XTX` when only `training_XTY` and/or `training_statistics` are used, which can dominate `fit` for wide `X`. A product that is not computed is `None`, and the training methods that need it raise a `ValueError`. The products are still computed in `fit`, so they are pickled along with a fitted `CVMatrix` and are not recomputed per task when cross-validating in parallel worker processes (e.g., with `joblib`).
+- Support for free-threaded Python. The CI test matrices now include free-threaded Python 3.15 (`3.15t`) on Linux, macOS, and Windows, with a check that no dependency re-enables the GIL. The JAX backend is tested on `3.15t` on Linux and macOS only, as jaxlib publishes no free-threaded wheel for Windows. The package declares the `Programming Language :: Python :: Free Threading :: 3 - Stable` classifier. A fitted `CVMatrix` can be shared by multiple threads, as the per-fold training methods only read it.
+
+### Changed
+- The CI test workflow for pushes to `main` now also tests Python 3.15, matching the pull-request workflow.
+- The per-fold training methods now gather only the validation set rows they use. Previously, the unweighted validation set rows of `X` were gathered, but not used, by `training_XTY` and `training_statistics`. With `weights` on the numpy backend, this makes `training_XTY` ~20% faster and `training_statistics` ~25-45% faster. Results are unchanged. Unweighted computations and computations traced by `jax.jit` were not affected.
+
+### Fixed
+- A fitted `CVMatrix` can be pickled with the standard library again. Since 3.2.0, the instance held the array namespace `xp` (the `numpy` or `jax.numpy` module), which cannot be pickled, so `pickle`, `copy.deepcopy`, `multiprocessing`, and `concurrent.futures.ProcessPoolExecutor` failed with `TypeError: cannot pickle 'module' object` (`joblib`'s default `loky` backend was not affected, as it pickles with `cloudpickle`). The module is now left out of the pickled state and resolved again from `backend` when unpickling. With `backend="jax"`, JAX's 64-bit mode is enabled before the arrays are restored, so float64 data stays float64 in fresh worker processes, where it would otherwise silently become float32.
+- Re-fitting a `CVMatrix` now replaces all state derived from `Y` instead of keeping it from the previous fit. Re-fitting without `Y` resets `XTY`, `WY`, `sum_Y`, `sq_Y`, and `sum_sq_Y` to `None`, and re-fitting with weights that do not require `WY` (no `center_X`, `center_Y`, or `scale_Y`) resets `WY` to `None`; likewise, `sq_X` is reset to `None` when `scale_X` is `False`. Results were not affected, but the stale arrays were kept in memory and pickled along with the fitted model (e.g., to parallel worker processes).
+
 ## [3.2.3] - 2026-10-30
 - Increased the maximum supported Python version from 3.14 to 3.15. Python 3.15 is now included in the CI test matrices. No functional changes.
 
