@@ -15,8 +15,12 @@ Author: Ole-Christian Galbo Engstrøm
 E-mail: ocge@foss.dk
 """
 
+import multiprocessing
+import pickle
 import sys
 from collections.abc import Hashable
+from concurrent.futures import ProcessPoolExecutor
+from copy import deepcopy
 from itertools import product
 from typing import Iterable, Union
 
@@ -798,6 +802,57 @@ class TestClass:
                         assert result[0] is result[1]
                     if flags[2] and flags[3]:
                         assert result[2] is result[3]
+
+    def test_pickle(self):
+        """
+        Tests that a fitted CVMatrix survives a round trip through the standard
+        library's pickle and through copy.deepcopy, which uses the same protocol, with
+        the same settings and results, although it holds the array namespace module
+        `xp`, which cannot be pickled.
+        """
+        X = self.load_X()[:, :5]
+        Y = self.load_Y(["Protein", "Moisture"])
+        weights = self.load_weights(random=True)
+        val_indices = np.arange(0, X.shape[0], 7)
+        fast = CVMatrix(backend=self.backend, compute_XTX=False)
+        fast.fit(X, Y, weights)
+        XTY, stats = fast.training_XTY(val_indices)
+        for clone in (pickle.loads(pickle.dumps(fast)), deepcopy(fast)):
+            assert type(clone) is CVMatrix
+            assert clone.xp is fast.xp
+            assert clone.XTX is None and not clone.compute_XTX
+            clone_XTY, clone_stats = clone.training_XTY(val_indices)
+            assert_allclose(clone_XTY, XTY)
+            self.check_equivalent_stats(stats, clone_stats)
+
+    def test_process_pool(self):
+        """
+        Tests that a fitted CVMatrix can be used from worker processes of
+        concurrent.futures.ProcessPoolExecutor, which pickles with the standard
+        library. The workers are started with `spawn`, i.e., as fresh interpreters (the
+        default on Windows and macOS). With the jax backend, this also checks that
+        float64 data stays float64 in a fresh process, where JAX's 64-bit mode is
+        initially disabled.
+        """
+        X = self.load_X()[:, :5]
+        Y = self.load_Y(["Protein", "Moisture"])
+        weights = self.load_weights(random=True)
+        p = Partitioner(self.load_Y(["split"]).squeeze())
+        val_indices = [p.get_validation_indices(fold) for fold in p.folds_dict]
+        fast = CVMatrix(backend=self.backend)
+        fast.fit(X, Y, weights)
+        with ProcessPoolExecutor(
+            max_workers=2, mp_context=multiprocessing.get_context("spawn")
+        ) as executor:
+            results = list(executor.map(fast.training_XTX_XTY, val_indices))
+        for indices, ((XTX, XTY), stats) in zip(val_indices, results):
+            (expected_XTX, expected_XTY), expected_stats = fast.training_XTX_XTY(
+                indices
+            )
+            assert np.asarray(XTX).dtype == np.asarray(XTY).dtype == np.float64
+            assert_allclose(XTX, expected_XTX, rtol=1e-12)
+            assert_allclose(XTY, expected_XTY, rtol=1e-12)
+            self.check_equivalent_stats(expected_stats, stats, atol=1e-12)
 
     def test_naive_hadamard_vs_matmul(self):
         """

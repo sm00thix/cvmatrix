@@ -100,6 +100,37 @@ def _resolve_backend(backend: str):
     raise ValueError(f"Invalid backend: {backend!r}. Must be 'numpy' or 'jax'.")
 
 
+def _reconstruct(cls: type, backend: str, dtype: FloatDType) -> CVMatrix:
+    """
+    Creates an empty instance of `cls`, a `CVMatrix` or a subclass, with its array
+    backend set up. Used by `CVMatrix.__reduce__` for unpickling: pickle calls it before
+    restoring the pickled arrays, so that, with the jax backend and a 64-bit `dtype`,
+    JAX's 64-bit mode is enabled before the arrays are rebuilt. Otherwise, float64
+    arrays would silently become float32 in a fresh process, e.g., a worker process.
+
+    Parameters
+    ----------
+    cls : type
+        The class of the pickled instance.
+
+    backend : {"numpy", "jax"}
+        The array backend of the pickled instance.
+
+    dtype : type[np.floating]
+        The data type of the pickled instance.
+
+    Returns
+    -------
+    CVMatrix
+        An instance of `cls` with `backend`, `dtype`, and `xp` set.
+    """
+    obj = cls.__new__(cls)
+    obj.backend = backend
+    obj.dtype = dtype
+    obj._init_backend()
+    return obj
+
+
 class CVMatrix:
     r"""
     Implements the fast cross-validation algorithms for kernel matrix-based models such
@@ -206,17 +237,7 @@ class CVMatrix:
         self.compute_XTX = compute_XTX
         self.compute_XTY = compute_XTY
         self.backend = backend
-        # Array namespace: numpy (default) or jax.numpy. All array operations are routed
-        # through `self.xp` so that, with backend="jax", the per-fold `training_*`
-        # methods can be traced by jax.jit/jax.vmap. The numpy backend is byte-identical
-        # to previous releases.
-        self.xp = _resolve_backend(backend)
-        if backend == "jax" and np.dtype(self.dtype).itemsize >= 8:
-            # JAX defaults to 32-bit; enable 64-bit precision so a requested float64
-            # dtype is honored instead of being silently truncated to float32.
-            import jax
-
-            jax.config.update("jax_enable_x64", True)
+        self._init_backend()
         self.resolution = np.finfo(dtype).resolution * 10
         self.X = None
         self.Y = None
@@ -236,6 +257,18 @@ class CVMatrix:
         self.weights = None
         self.sum_w = None
         self.num_nonzero_w = None
+
+    def __reduce__(self) -> tuple:
+        """
+        Supports pickling with the standard library, e.g., to send a fitted `CVMatrix`
+        to worker processes with `multiprocessing` or
+        `concurrent.futures.ProcessPoolExecutor`. The array namespace `xp` is a module,
+        which cannot be pickled, so it is left out of the pickled state and resolved
+        again from `backend` by `_reconstruct` before the state is restored.
+        """
+        state = self.__dict__.copy()
+        del state["xp"]
+        return _reconstruct, (type(self), self.backend, self.dtype), state
 
     def fit(
         self,
@@ -1244,6 +1277,21 @@ class CVMatrix:
         mat_train_std = xp.sqrt(mat_train_var)
         mat_train_std = xp.where(mat_train_std <= self.resolution, 1, mat_train_std)
         return mat_train_std
+
+    def _init_backend(self) -> None:
+        """
+        Resolves the array namespace `xp` from `backend`: numpy (the default) or
+        jax.numpy. All array operations are routed through `xp` so that, with the jax
+        backend, the per-fold `training_*` methods can be traced by jax.jit/jax.vmap.
+        The numpy backend is byte-identical to previous releases. JAX defaults to 32
+        bits, so with the jax backend and a 64-bit `dtype`, JAX's 64-bit mode is enabled
+        so that `dtype` is honored instead of being silently truncated to float32.
+        """
+        self.xp = _resolve_backend(self.backend)
+        if self.backend == "jax" and np.dtype(self.dtype).itemsize >= 8:
+            import jax
+
+            jax.config.update("jax_enable_x64", True)
 
     def _init_mat(self, mat: Array) -> Array:
         """
