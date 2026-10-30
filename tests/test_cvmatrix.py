@@ -682,6 +682,123 @@ class TestClass:
         (XTWX, _), _ = jax.jit(cvm.training_XTX_XTY)(jnp.asarray(degenerate_val))
         assert XTWX.shape == (4, 4)
 
+    def test_compute_matrix_products(self):
+        """
+        Tests that `compute_XTX` and `compute_XTY` control which dataset-wide matrix
+        products `fit` computes, that the training methods needing a product that is
+        not computed raise a ValueError, and that the remaining methods give the same
+        results as when both products are computed.
+        """
+
+        def leaves(result):
+            if isinstance(result, tuple):
+                return [leaf for r in result for leaf in leaves(r)]
+            return [result]
+
+        X = self.load_X()[:, :5]
+        Y = self.load_Y(["Protein", "Moisture"])
+        weights = self.load_weights(random=True)
+        folds = self.load_Y(["split"]).squeeze()
+        p = Partitioner(folds)
+        val_indices = p.get_validation_indices(next(iter(p.folds_dict)))
+        reference = CVMatrix(backend=self.backend)
+        reference.fit(X, Y, weights)
+        for compute_XTX, compute_XTY in product([True, False], repeat=2):
+            fast = CVMatrix(
+                backend=self.backend, compute_XTX=compute_XTX, compute_XTY=compute_XTY
+            )
+            fast.fit(X, Y, weights)
+            assert (fast.XTX is not None) == compute_XTX
+            assert (fast.XTY is not None) == compute_XTY
+            allowed = {
+                "training_XTX": compute_XTX,
+                "training_XTY": compute_XTY,
+                "training_XTX_XTY": compute_XTX and compute_XTY,
+                "training_statistics": True,
+            }
+            for method, is_allowed in allowed.items():
+                if not is_allowed:
+                    with pytest.raises(ValueError, match="was not computed by `fit`"):
+                        getattr(fast, method)(val_indices)
+                    continue
+                actual = leaves(getattr(fast, method)(val_indices))
+                desired = leaves(getattr(reference, method)(val_indices))
+                assert len(actual) == len(desired)
+                for a, d in zip(actual, desired):
+                    if d is None:
+                        assert a is None
+                    else:
+                        assert_allclose(a, d)
+
+        # The check is on the fitted products, not the flags, so changing a flag after
+        # `fit` still raises the documented ValueError.
+        fast = CVMatrix(backend=self.backend, compute_XTX=False, compute_XTY=False)
+        fast.fit(X, Y, weights)
+        fast.compute_XTX = fast.compute_XTY = True
+        for method in ("training_XTX", "training_XTY", "training_XTX_XTY"):
+            with pytest.raises(ValueError, match="was not computed by `fit`"):
+                getattr(fast, method)(val_indices)
+
+    def test_refit_resets_Y_derived_state(self):
+        """
+        Tests that re-fitting replaces all state derived from `Y` instead of keeping
+        it from the previous fit: re-fitting without `Y` resets `XTY`, `WY`, `sum_Y`,
+        `sq_Y`, and `sum_sq_Y` to `None`, and re-fitting with weights that do not need
+        `WY` resets `WY` to `None` instead of keeping the previous `Y`.
+        """
+        X = self.load_X()[:, :5]
+        Y = self.load_Y(["Protein", "Moisture"])
+        weights = self.load_weights(random=True)
+        Y_derived = ("XTY", "WY", "sum_Y", "sq_Y", "sum_sq_Y")
+        fast = CVMatrix(backend=self.backend)
+        fast.fit(X, Y, weights)
+        assert all(getattr(fast, attr) is not None for attr in Y_derived)
+        fast.fit(X, None, weights)
+        assert all(getattr(fast, attr) is None for attr in Y_derived)
+
+        fast = CVMatrix(
+            center_X=False, center_Y=False, scale_X=False, scale_Y=False,
+            backend=self.backend,
+        )
+        fast.fit(X, Y)  # Unweighted: `WY` is `Y` itself.
+        assert fast.WY is fast.Y
+        fast.fit(X, Y, weights)  # Weighted, but no statistics of `Y` are needed.
+        assert fast.WY is None
+
+    def test_get_val_matrices_returns_only_requested(self):
+        """
+        Tests that `_get_val_matrices` gathers only the requested validation set
+        matrices, returning `None` for the others, that the requested ones equal the
+        validation rows of `WX`, `X`, `WY`, and `Y`, and that without weights a
+        weighted and unweighted matrix requested together share a single gather.
+        """
+        X = self.load_X()[:, :5]
+        Y = self.load_Y(["Protein", "Moisture"])
+        val_indices = np.arange(0, X.shape[0], 7)
+        for weights in (None, self.load_weights(random=True)):
+            fast = CVMatrix(backend=self.backend)
+            fast.fit(X, Y, weights)
+            w = np.ones((X.shape[0], 1)) if weights is None else weights[:, None]
+            expected = (X * w, X, Y * w, Y)
+            for flags in product([True, False], repeat=4):
+                result = fast._get_val_matrices(
+                    val_indices,
+                    return_X_val=flags[0],
+                    return_X_val_unweighted=flags[1],
+                    return_Y_val=flags[2],
+                    return_Y_val_unweighted=flags[3],
+                )
+                for requested, mat_val, mat in zip(flags, result, expected):
+                    if requested:
+                        assert_allclose(mat_val, mat[val_indices])
+                    else:
+                        assert mat_val is None
+                if weights is None:
+                    if flags[0] and flags[1]:
+                        assert result[0] is result[1]
+                    if flags[2] and flags[3]:
+                        assert result[2] is result[3]
+
     def test_naive_hadamard_vs_matmul(self):
         """
         Tests if the NaiveCVMatrix model gives the same result when using Hadamard
