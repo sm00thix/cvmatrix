@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0] - 2026-10-31
+
+### Added
+- With `backend="jax"`, `fit` accepts sample weights traced by `jax.jit` or `jax.vmap`, e.g., one weight vector per dataset when vmapping over datasets, as in distance-weighted local PLS. Previously, traced weights raised `TracerBoolConversionError`. As for traced validation indices, data-dependent checks are skipped for traced values: the caller must check the concrete weights before tracing (non-negative; at least one non-zero training weight in each fold when centering or scaling, and more than `ddof` when scaling), as invalid traced weights silently give wrong or NaN results.
+- Concrete weights and validation indices are now checked as in eager execution even inside `jax.jit`, e.g., when they are closed over, or when a model fitted eagerly is used in a jitted function. The checks are evaluated at trace time under `jax.ensure_compile_time_eval()`. Previously, with weights, such calls raised `TracerBoolConversionError` even for valid folds.
+- `CVMatrix.validate_folds(folds, N, weights=None)`: a host-side pre-flight check for folds and weights that will be traced, where the training methods cannot check them. It performs, on the concrete values, the checks of the training methods (non-negative weights after the cast to `dtype`; non-zero and more than `ddof` non-zero training weights per fold, depending on centering and scaling), and also checks that the validation indices are in the range 0 to `N` - 1, as JAX silently clamps out-of-range indices under tracing. It accepts a `Partitioner`, a mapping from folds to validation indices, or an iterable or 2-D array of validation indices, needs no fitted instance, and lists every failing fold in one `ValueError`.
+
+### Changed
+- The CI's `setup-uv` action is updated from v7 to v10.3.3 in the build and test actions.
+
+### Fixed
+- Without weights, degenerate folds now raise also when the validation indices are traced by `jax.jit` or `jax.vmap`: the training-set size is known while tracing, as array shapes are. Previously, the check was skipped, and too few training samples for `ddof` silently gave infinite standard deviations.
+- Without weights, a fold whose training set is empty now raises the same `ValueError` as with weights when training-set statistics are needed (centering or scaling), instead of silently giving NaN means.
+- A `fit` that raises because of negative weights now leaves a previously fitted instance unchanged. Previously, it had already replaced `X`, `Y`, and `weights`, so later calls mixed them with the previous matrix products and statistics.
+
+### Notes
+- The NumPy backend's results are unchanged; its only behavior change is the empty-training-set fix above. When constructing a `CVMatrix` with a 64-bit `dtype` inside a function traced by `jax.jit` or `jax.vmap`, enable JAX's 64-bit mode before tracing (now documented under `backend`).
+
 ## [3.3.0] - 2026-10-30
 
 ### Added
