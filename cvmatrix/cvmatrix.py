@@ -43,6 +43,21 @@ FloatDType = npt.DTypeLike
 # validate like the numpy backend.
 _TRACER_TYPES: tuple = ()
 
+# The degenerate-fold errors. The training methods and `CVMatrix.validate_folds` use the
+# same messages and conditions: a training set needs at least one non-zero weight
+# (count < 1 is rejected), and more than `ddof` of them for standard deviations.
+_NO_NONZERO_WEIGHTS_MSG = (
+    "The number of non-zero weights in the training set must be greater than zero."
+)
+_TOO_FEW_NONZERO_WEIGHTS_MSG = (
+    "The number of non-zero weights in the training set must be greater than `ddof`."
+)
+# The weight-shape error of `fit` and `CVMatrix.validate_folds`, which share the rule.
+_WEIGHTS_SHAPE_MSG = (
+    "`weights` must have shape (N,) or (N, 1), with N = {N}, but it has shape {shape} "
+    "(1-D weights are reshaped to (n, 1))."
+)
+
 
 def _enable_jax_typing() -> None:
     """Broaden the array/scalar aliases and tracer types to admit JAX values.
@@ -411,9 +426,13 @@ class CVMatrix:
         Raises
         ------
         ValueError
-            If `weights` is provided and contains negative values. This is not checked
-            for traced weights (see `weights`). Concrete weights are checked even inside
-            `jax.jit`. A previously fitted instance is then left unchanged.
+            - If `X` or `Y` is not 1-D or 2-D, or if `Y` or `weights` does not have as
+              many rows as `X`.
+            - If `weights` is provided and contains negative values. This is not
+              checked for traced weights (see `weights`). Concrete weights are checked
+              even inside `jax.jit`.
+
+            A previously fitted instance is then left unchanged.
         """
         self._init_mats(X, Y, weights)
         self._init_weighted_mats()
@@ -697,7 +716,9 @@ class CVMatrix:
             cvmatrix.partitioner.Partitioner, a mapping from each fold to its
             validation indices, or an iterable of validation index arrays, e.g., the
             2-D array of shape (n_folds, N_val) that is batched over with `jax.vmap`.
-            In the last case, the folds are named by their position.
+            In the last case, the folds are named by their position. Each fold's
+            validation indices must be a 1-D array, so per-sample fold labels must be
+            passed as a Partitioner.
 
         N : int
             The number of samples in the dataset.
@@ -714,8 +735,13 @@ class CVMatrix:
         ValueError
             - If `weights` does not have `N` elements or contains negative values
               after the cast to `dtype`.
+            - If `folds` is a 1-D array, or any fold's validation indices are not a
+              1-D array.
             - If any fold has validation indices outside 0 to `N` - 1. JAX silently
               clamps such indices under tracing.
+            - If any fold has duplicate validation indices, which would remove a
+              sample from the training set more than once and silently give wrong
+              training matrices and statistics.
             - If `center_X`, `center_Y`, `scale_X`, or `scale_Y` is `True` and the
               training set of any fold has no non-zero weights.
             - If `scale_X` or `scale_Y` is `True` and the training set of any fold
@@ -726,11 +752,13 @@ class CVMatrix:
             rejected that a particular training method would accept.
         """
         if weights is not None:
-            weights = np.asarray(weights, dtype=self.dtype).reshape(-1)
-            if weights.shape[0] != N:
-                raise ValueError(
-                    f"`weights` has {weights.shape[0]} elements, but `N` is {N}."
-                )
+            # The same shape rule as `fit`, applied to the weights cast to `dtype`.
+            weights = np.asarray(weights, dtype=self.dtype)
+            if weights.ndim == 1:
+                weights = weights.reshape(-1, 1)
+            if weights.shape != (N, 1):
+                raise ValueError(_WEIGHTS_SHAPE_MSG.format(N=N, shape=weights.shape))
+            weights = weights.reshape(-1)
             if np.any(weights < 0):
                 raise ValueError("Weights must be non-negative.")
             num_nonzero_w = int(np.count_nonzero(weights))
@@ -738,14 +766,42 @@ class CVMatrix:
         needs_std = self.scale_X or self.scale_Y
         if isinstance(folds, Partitioner):
             folds = folds.folds_dict
+        if getattr(folds, "ndim", None) == 1:
+            raise ValueError(
+                "`folds` is a 1-D array, but each fold needs a 1-D array of validation "
+                "indices. Pass [validation_indices] for a single fold, or "
+                "Partitioner(folds) for per-sample fold labels."
+            )
         fold_items = folds.items() if isinstance(folds, Mapping) else enumerate(folds)
         problems = []
         for fold, val_indices in fold_items:
-            val_indices = np.asarray(val_indices).reshape(-1)
+            if isinstance(fold, np.generic):  # E.g., Partitioner's np.int64 folds.
+                fold = fold.item()
+            val_indices = np.asarray(val_indices)
+            if val_indices.ndim != 1:
+                problems.append(
+                    f"Fold {fold!r}: the validation indices must be a 1-D array, but "
+                    f"they have {val_indices.ndim} dimensions."
+                )
+                continue
+            if val_indices.dtype.kind not in "iu":
+                if val_indices.size:
+                    problems.append(
+                        f"Fold {fold!r}: the validation indices must be integers, but "
+                        f"they have dtype {val_indices.dtype}."
+                    )
+                    continue
+                val_indices = val_indices.astype(np.intp)  # An empty fold, e.g., [].
             if val_indices.size and (val_indices.min() < 0 or val_indices.max() >= N):
                 problems.append(
                     f"Fold {fold!r}: the validation indices must be in the range 0 to "
                     f"{N - 1}."
+                )
+                continue
+            if np.unique(val_indices).size != val_indices.size:
+                problems.append(
+                    f"Fold {fold!r}: the validation indices contain duplicates, which "
+                    "would remove a sample from the training set more than once."
                 )
                 continue
             if not needs_stats:
@@ -756,16 +812,17 @@ class CVMatrix:
                 num_nonzero_w_train = num_nonzero_w - int(
                     np.count_nonzero(weights[val_indices])
                 )
+            # The same conditions as `_get_sum_w_train_and_num_nonzero_w_train` and
+            # `_compute_std_divisor`.
             if num_nonzero_w_train < 1:
                 problems.append(
-                    f"Fold {fold!r}: the number of non-zero weights in the training "
-                    f"set must be greater than zero, but it is {num_nonzero_w_train}."
+                    f"Fold {fold!r}: {_NO_NONZERO_WEIGHTS_MSG} It is "
+                    f"{num_nonzero_w_train}."
                 )
             elif needs_std and num_nonzero_w_train <= self.ddof:
                 problems.append(
-                    f"Fold {fold!r}: the number of non-zero weights in the training "
-                    f"set must be greater than `ddof` ({self.ddof}), but it is "
-                    f"{num_nonzero_w_train}."
+                    f"Fold {fold!r}: {_TOO_FEW_NONZERO_WEIGHTS_MSG} It is "
+                    f"{num_nonzero_w_train}, and `ddof` is {self.ddof}."
                 )
         if problems:
             raise ValueError("Invalid folds:\n" + "\n".join(problems))
@@ -825,15 +882,16 @@ class CVMatrix:
                 and not isinstance(self.weights, _TRACER_TYPES)
                 and not isinstance(val_indices, _TRACER_TYPES)
             ):
-                # jax.jit staged the count of concrete weights and indices: count again
-                # at trace time, so that the checks here and in `_compute_std_divisor`
-                # run as in eager execution. Converting to a Python int keeps the
-                # comparisons below from being staged as well.
+                # jax.jit staged the count of concrete weights and indices: count the
+                # validation rows again at trace time (O(N_val), as the dataset count
+                # is already concrete; see `_init_stats`), so that the checks here and
+                # in `_compute_std_divisor` run as in eager execution. Converting to a
+                # Python int keeps the comparisons below from being staged as well.
                 import jax
 
                 with jax.ensure_compile_time_eval():
                     num_nonzero_w_train = int(
-                        xp.count_nonzero(self.weights)
+                        self.num_nonzero_w
                         - xp.count_nonzero(self.weights[val_indices])
                     )
         # The count is a tracer only if the weights or, with weights, `val_indices` are
@@ -841,12 +899,9 @@ class CVMatrix:
         # on the concrete weights and indices before tracing.
         if (
             not isinstance(num_nonzero_w_train, _TRACER_TYPES)
-            and num_nonzero_w_train == 0
+            and num_nonzero_w_train < 1  # Also negative, e.g., for duplicate indices.
         ):
-            raise ValueError(
-                "The number of non-zero weights in the training set must be "
-                "greater than zero."
-            )
+            raise ValueError(_NO_NONZERO_WEIGHTS_MSG)
         return sum_w_train, num_nonzero_w_train
 
     def _compute_training_stats(
@@ -1368,10 +1423,7 @@ class CVMatrix:
         # jax.jit/vmap (`traced`), the check is deferred to a host-side pre-flight on the
         # concrete indices and weights before tracing.
         if not traced and num_nonzero_w_train <= self.ddof:
-            raise ValueError(
-                "The number of non-zero weights in the training set must be greater "
-                "than `ddof`."
-            )
+            raise ValueError(_TOO_FEW_NONZERO_WEIGHTS_MSG)
         return (num_nonzero_w_train - self.ddof) * sum_w_train / num_nonzero_w_train
 
     def _compute_training_mat_std(
@@ -1488,30 +1540,53 @@ class CVMatrix:
         Raises
         ------
         ValueError
-            If `weights` is provided and contains negative values. The instance is then
+            If `X` or `Y` is not 1-D or 2-D, if `Y` or `weights` does not have as many
+            rows as `X`, or if `weights` contains negative values. The instance is then
             left unchanged.
         """
         X = self._init_mat(X)
-        Y = None if Y is None else self._init_mat(Y)
+        try:
+            N, K = X.shape
+        except ValueError:
+            raise ValueError(
+                f"`X` must be 1-D or 2-D, but it has {X.ndim} dimensions."
+            ) from None
+        M = None
+        if Y is not None:
+            Y = self._init_mat(Y)
+            try:
+                N_Y, M = Y.shape
+            except ValueError:
+                raise ValueError(
+                    f"`Y` must be 1-D or 2-D, but it has {Y.ndim} dimensions."
+                ) from None
+            if N_Y != N:
+                raise ValueError(f"`Y` has {N_Y} rows, but `X` has {N}.")
         if weights is not None:
             init_weights = self._init_mat(weights)
+            if init_weights.shape != (N, 1):
+                # The shape of the initialized weights is static, also under tracing.
+                raise ValueError(
+                    _WEIGHTS_SHAPE_MSG.format(N=N, shape=tuple(init_weights.shape))
+                )
             negative = self.xp.any(init_weights < 0)
-            if isinstance(negative, _TRACER_TYPES) and not isinstance(
-                weights, _TRACER_TYPES
-            ):
-                # jax.jit staged weights that are possibly concrete, e.g., closed over.
-                init_weights, negative = self._init_weights_at_trace_time(weights)
-            # `negative` is a tracer only for traced weights, which the caller validates
-            # before tracing (see `fit`).
-            if not isinstance(negative, _TRACER_TYPES) and bool(negative):
+            if isinstance(negative, _TRACER_TYPES):
+                if not isinstance(weights, _TRACER_TYPES):
+                    # jax.jit staged weights that are possibly concrete, e.g., closed
+                    # over.
+                    init_weights, negative = self._init_weights_at_trace_time(weights)
+                # `negative` is still a tracer only for traced weights, which the
+                # caller validates before tracing (see `fit`).
+                negative = not isinstance(negative, _TRACER_TYPES) and bool(negative)
+            if negative:
                 raise ValueError("Weights must be non-negative.")
             weights = init_weights
         # Assign only after validation, so that a fit that raises leaves a previously
         # fitted instance unchanged.
         self.X = X
-        self.N, self.K = X.shape
+        self.N, self.K = N, K
         self.Y = Y
-        self.M = None if Y is None else Y.shape[1]
+        self.M = M
         self.weights = weights
 
     def _init_weights_at_trace_time(
@@ -1596,6 +1671,17 @@ class CVMatrix:
             if self.weights is not None:
                 self.sum_w = self.xp.sum(self.weights)
                 self.num_nonzero_w = self.xp.count_nonzero(self.weights)
+                if isinstance(self.num_nonzero_w, _TRACER_TYPES) and not isinstance(
+                    self.weights, _TRACER_TYPES
+                ):
+                    # jax.jit staged the count of concrete weights, e.g., closed over:
+                    # count them once at trace time, so that the per-fold checks need
+                    # to count only the validation rows (see
+                    # `_get_sum_w_train_and_num_nonzero_w_train`).
+                    import jax
+
+                    with jax.ensure_compile_time_eval():
+                        self.num_nonzero_w = int(self.xp.count_nonzero(self.weights))
             else:
                 self.sum_w = self.N
                 self.num_nonzero_w = self.N

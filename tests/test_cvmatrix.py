@@ -800,6 +800,46 @@ class TestClass:
             for f in range(n_folds):
                 check(result[f], 0, shared_val[f])
 
+    def test_jax_trace_time_checks_do_not_scale_with_folds(self, monkeypatch):
+        """
+        Tests that checking concrete weights inside jax.jit counts the whole weight
+        vector a fixed number of times per trace, not once per fold, so that the
+        trace-time checks of F folds cost O(F * N_val) rather than O(F * N).
+        """
+        if getattr(self, "backend", "numpy") != "jax":
+            pytest.skip("JAX-specific trace test; runs under the jax parametrization.")
+        pytest.importorskip("jax")
+        import jax
+        import jax.numpy as jnp
+
+        jax.config.update("jax_enable_x64", True)
+        rng = np.random.default_rng(0)
+        N = 50
+        X, Y = rng.standard_normal((N, 3)), rng.standard_normal((N, 1))
+        weights = rng.uniform(0.1, 2.0, N)
+        full_counts = []
+        count_nonzero = jnp.count_nonzero
+
+        def counting(a, *args, **kwargs):
+            if not isinstance(a, jax.core.Tracer) and np.size(a) == N:
+                full_counts.append(1)
+            return count_nonzero(a, *args, **kwargs)
+
+        monkeypatch.setattr(jnp, "count_nonzero", counting)
+        counts = []
+        for n_folds in (2, 10):
+            folds = [np.arange(2 * i, 2 * i + 2) for i in range(n_folds)]
+
+            def f(x, y, folds=folds):
+                cvm = CVMatrix(ddof=1, backend="jax")
+                cvm.fit(x, y, weights)
+                return [cvm.training_statistics(v)[0] for v in folds]
+
+            full_counts.clear()
+            jax.jit(f).lower(X, Y)
+            counts.append(len(full_counts))
+        assert counts[0] == counts[1]
+
     def test_jax_traced_weights_validation(self):
         """
         Tests which weight checks run when CVMatrix is traced by jax.jit/jax.vmap.
@@ -840,6 +880,8 @@ class TestClass:
             lambda x, s: fit_and_train(x, Y[0], [s] * N)  # A list of traced scalars.
         )(X[0], 1.0)
         assert XTWX.shape == (K, K)
+        with pytest.raises(ValueError, match=r"`weights` must have shape \(N,\)"):
+            jax.jit(lambda x, s: fit_and_train(x, Y[0], [s] * (N - 1)))(X[0], 1.0)
 
         # No non-zero training weights, and fewer than ddof + 1 of them.
         no_train = np.zeros(N)
@@ -868,7 +910,8 @@ class TestClass:
         """
         Tests that a fold whose training set is empty raises a ValueError when the
         training statistics are needed, both unweighted and weighted, instead of
-        silently giving NaN means in the unweighted case.
+        silently giving NaN means in the unweighted case. This includes validation
+        indices with duplicates, which make the training count negative.
         """
         X = self.load_X()[:20, :5]
         Y = self.load_Y(["Protein", "Moisture"])[:20]
@@ -880,14 +923,15 @@ class TestClass:
             )
             fast.fit(X, Y, weights)
             for method in ("training_statistics", "training_XTX", "training_XTX_XTY"):
-                with pytest.raises(ValueError, match="greater than zero"):
-                    getattr(fast, method)(all_indices)
+                for val_indices in (all_indices, np.repeat(all_indices, 2)):
+                    with pytest.raises(ValueError, match="greater than zero"):
+                        getattr(fast, method)(val_indices)
 
     def test_failed_fit_leaves_instance_unchanged(self):
         """
-        Tests that a fit that raises on negative weights leaves a previously fitted
-        instance unchanged, instead of mixing the new X, Y, and weights with the
-        previous matrix products and statistics.
+        Tests that a fit that raises, on negative weights or on inconsistent shapes,
+        leaves a previously fitted instance unchanged, instead of mixing the new X, Y,
+        and weights with the previous matrix products and statistics.
         """
         X = self.load_X()[:, :5]
         Y = self.load_Y(["Protein", "Moisture"])
@@ -899,10 +943,19 @@ class TestClass:
         (XTWX, XTWY), stats = fast.training_XTX_XTY(val_indices)
         negative = weights.copy()
         negative[0] = -1.0
-        with pytest.raises(ValueError, match="Weights must be non-negative."):
-            fast.fit(2 * X, 2 * Y, negative)
-        assert vars(fast).keys() == state.keys()
-        assert all(vars(fast)[k] is v for k, v in state.items())
+        for args, match in (
+            ((2 * X, 2 * Y, negative), "Weights must be non-negative."),
+            ((X[:-1], Y[:-1], weights), r"`weights` must have shape \(N,\)"),
+            ((X, Y[:-1], weights), "`Y` has"),
+            ((X, Y, np.stack([weights, weights], axis=1)), "`weights` must have"),
+            ((X[None], Y, weights), "`X` must be 1-D or 2-D"),
+            ((X, Y, 2.0), "`weights` must have"),  # Scalar weights.
+            ((X, Y[None], weights), "`Y` must be 1-D or 2-D"),
+        ):
+            with pytest.raises(ValueError, match=match):
+                fast.fit(*args)
+            assert vars(fast).keys() == state.keys()
+            assert all(vars(fast)[k] is v for k, v in state.items())
         (XTWX_after, XTWY_after), stats_after = fast.training_XTX_XTY(val_indices)
         assert_allclose(XTWX_after, XTWX)
         assert_allclose(XTWY_after, XTWY)
@@ -950,6 +1003,17 @@ class TestClass:
             with pytest.raises(ValueError, match=match):
                 unfitted.validate_folds([val_indices], N, weights)
 
+        # Duplicate validation indices: eager execution only catches them when they
+        # drive the training count below one (here -7); validate_folds always does.
+        many = np.repeat(np.arange(5, N), 2)
+        with pytest.raises(ValueError, match="greater than zero"):
+            fitted.training_statistics(many)
+        few = np.array([5, 5, 6])  # The count stays at 3, so eager does not raise.
+        fitted.training_statistics(few)
+        for duplicated in (many, few):
+            with pytest.raises(ValueError, match="Fold 0: the validation indices"):
+                unfitted.validate_folds([duplicated], N, weights)
+
         # Every failing fold is reported, with weights and without.
         folds = {
             "zero": np.arange(5, N),
@@ -969,6 +1033,22 @@ class TestClass:
         assert "Fold 1:" in message and "greater than `ddof`" in message
         assert "Fold 2:" not in message
 
+        # Partitioner's NumPy integer folds are named plainly in the message.
+        only_fold_1 = np.zeros(N)
+        only_fold_1[p.folds_dict[1]] = 1.0  # Fold 1's training set has no weights.
+        with pytest.raises(ValueError) as excinfo:
+            unfitted.validate_folds(p, N, only_fold_1)
+        message = str(excinfo.value)
+        assert "Fold 1: The number of non-zero weights" in message
+        assert "Fold 0:" not in message and "np." not in message
+
+        # Each fold must be a 1-D array of validation indices; a 1-D array as `folds`
+        # (one fold, or per-sample fold labels meant for Partitioner) is rejected.
+        with pytest.raises(ValueError, match="`folds` is a 1-D array"):
+            unfitted.validate_folds(np.arange(N) % 3, N, weights)
+        with pytest.raises(ValueError, match="Fold 1: the validation indices must be"):
+            unfitted.validate_folds([np.array([0, 1]), np.array([[2, 3]])], N)
+
         # Without centering and scaling, only the index range is checked.
         plain = CVMatrix(
             center_X=False, center_Y=False, scale_X=False, scale_Y=False,
@@ -978,9 +1058,23 @@ class TestClass:
         with pytest.raises(ValueError, match="Fold 0: the validation indices"):
             plain.validate_folds([np.array([-1])], N)
 
-        # Weights are checked after the cast to `dtype`, like in `fit`.
-        with pytest.raises(ValueError, match="has 11 elements"):
-            unfitted.validate_folds(p, N, weights[:-1])
+        # Validation indices must be integers; an empty fold is fine.
+        mask = np.zeros(N, dtype=bool)
+        mask[:2] = True
+        for val_indices in (np.array([0.0, 1.0]), mask):
+            with pytest.raises(ValueError, match="Fold 0: .* must be integers"):
+                unfitted.validate_folds([val_indices], N, weights)
+        unfitted.validate_folds([[]], N, weights)
+        unfitted.validate_folds([[]], N)
+
+        # Weights follow the shape rule of `fit` and are checked after the cast to
+        # `dtype`, like in `fit`.
+        for bad in (weights[:-1], weights[None], 2.0):
+            with pytest.raises(ValueError, match=r"`weights` must have shape \(N,\)"):
+                unfitted.validate_folds(p, N, bad)
+            with pytest.raises(ValueError, match=r"`weights` must have shape \(N,\)"):
+                fitted.fit(X, Y, bad)
+        unfitted.validate_folds(p, N, weights[:, None])
         negative = weights.copy()
         negative[6] = -1.0
         with pytest.raises(ValueError, match="Weights must be non-negative."):
