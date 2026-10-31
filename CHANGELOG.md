@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - The CI's `setup-uv` action is updated from v7 to v10.3.3 in the build and test actions.
+- Code that only runs with the JAX backend is marked `# pragma: has-jax` and excluded from coverage when JAX is not installed, using the new dev dependency `coverage-conditional-plugin`. The numpy-only test runs now only measure code they can run.
 
 ### Fixed
 - Without weights, degenerate folds now raise also when the validation indices are traced by `jax.jit` or `jax.vmap`: the training-set size is known while tracing, as array shapes are. Previously, the check was skipped, and too few training samples for `ddof` silently gave infinite standard deviations.

@@ -59,7 +59,7 @@ _WEIGHTS_SHAPE_MSG = (
 )
 
 
-def _enable_jax_typing() -> None:
+def _enable_jax_typing() -> None:  # pragma: has-jax
     """Broaden the array/scalar aliases and tracer types to admit JAX values.
 
     Called (idempotently) when the JAX backend is resolved. Kept out of module
@@ -103,7 +103,7 @@ def _resolve_backend(backend: str):
     """
     if backend == "numpy":
         return np
-    if backend == "jax":
+    if backend == "jax":  # pragma: has-jax
         try:
             import jax.numpy as jnp
         except ImportError as e:  # pragma: no cover - exercised only without jax
@@ -884,7 +884,7 @@ class CVMatrix:
         """
         if self.backend == "numpy":
             return self.dtype(x)
-        return x
+        return x  # pragma: has-jax
 
     def _get_sum_w_train_and_num_nonzero_w_train(
         self, val_indices: IndexArray
@@ -923,7 +923,7 @@ class CVMatrix:
             num_nonzero_w_train = self._as_scalar(
                 self.num_nonzero_w - num_nonzero_w_val
             )
-            if (
+            if (  # pragma: has-jax
                 isinstance(num_nonzero_w_train, _TRACER_TYPES)
                 and not isinstance(self.weights, _TRACER_TYPES)
                 and not isinstance(val_indices, _TRACER_TYPES)
@@ -1532,7 +1532,9 @@ class CVMatrix:
         so that `dtype` is honored instead of being silently truncated to float32.
         """
         self.xp = _resolve_backend(self.backend)
-        if self.backend == "jax" and np.dtype(self.dtype).itemsize >= 8:
+        if (  # pragma: has-jax
+            self.backend == "jax" and np.dtype(self.dtype).itemsize >= 8
+        ):
             import jax
 
             jax.config.update("jax_enable_x64", True)
@@ -1616,7 +1618,7 @@ class CVMatrix:
                     _WEIGHTS_SHAPE_MSG.format(N=N, shape=tuple(init_weights.shape))
                 )
             negative = self.xp.any(init_weights < 0)
-            if isinstance(negative, _TRACER_TYPES):
+            if isinstance(negative, _TRACER_TYPES):  # pragma: has-jax
                 if not isinstance(weights, _TRACER_TYPES):
                     # jax.jit staged weights that are possibly concrete, e.g., closed
                     # over.
@@ -1635,7 +1637,7 @@ class CVMatrix:
         self.M = M
         self.weights = weights
 
-    def _init_weights_at_trace_time(
+    def _init_weights_at_trace_time(  # pragma: has-jax
         self, weights: npt.ArrayLike
     ) -> Tuple[Array, Array]:
         """
@@ -1721,8 +1723,9 @@ class CVMatrix:
             The sum of the weights and their number of non-zero elements.
         """
         num_nonzero_w = self.xp.count_nonzero(self.weights)
-        if isinstance(num_nonzero_w, _TRACER_TYPES) and not isinstance(
-            self.weights, _TRACER_TYPES
+        if (  # pragma: has-jax
+            isinstance(num_nonzero_w, _TRACER_TYPES)
+            and not isinstance(self.weights, _TRACER_TYPES)
         ):
             import jax
 

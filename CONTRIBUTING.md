@@ -116,6 +116,8 @@ To run the test suite, follow these steps:
 
     The pytest options in `pyproject.toml` enable runtime type checking with [typeguard](https://typeguard.readthedocs.io/) (`--typeguard-packages=cvmatrix`) and coverage reports. Note that `--typeguard-packages` takes the package name `cvmatrix`, not a path: `cvmatrix/` silently instruments nothing.
 
+    Code that only runs with the JAX backend is marked `# pragma: has-jax`. With the rule in `pyproject.toml`, [coverage-conditional-plugin](https://pypi.org/project/coverage-conditional-plugin/) excludes it from coverage when JAX is not installed, so numpy-only runs only measure code they can run. Mark new JAX-only code the same way.
+
 ### Test on free-threaded Python
 
 CVMatrix also runs on free-threaded builds of Python (e.g., `3.15t`), which have no GIL. To run the test suite on one without touching your default environment, let uv create a temporary, isolated environment:
