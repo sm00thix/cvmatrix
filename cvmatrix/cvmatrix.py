@@ -752,18 +752,57 @@ class CVMatrix:
             rejected that a particular training method would accept.
         """
         if weights is not None:
-            # The same shape rule as `fit`, applied to the weights cast to `dtype`.
-            weights = np.asarray(weights, dtype=self.dtype)
-            if weights.ndim == 1:
-                weights = weights.reshape(-1, 1)
-            if weights.shape != (N, 1):
-                raise ValueError(_WEIGHTS_SHAPE_MSG.format(N=N, shape=weights.shape))
-            weights = weights.reshape(-1)
-            if np.any(weights < 0):
-                raise ValueError("Weights must be non-negative.")
-            num_nonzero_w = int(np.count_nonzero(weights))
+            weights, num_nonzero_w = self._validate_fold_weights(weights, N)
+        else:
+            num_nonzero_w = N
         needs_stats = self.center_X or self.center_Y or self.scale_X or self.scale_Y
         needs_std = self.scale_X or self.scale_Y
+        problems = []
+        for fold, val_indices in self._fold_items(folds):
+            problem = self._fold_index_problem(val_indices, N)
+            if problem is None and needs_stats:
+                problem = self._fold_count_problem(
+                    val_indices, weights, num_nonzero_w, needs_std
+                )
+            if problem is not None:
+                problems.append(f"Fold {fold!r}: {problem}")
+        if problems:
+            raise ValueError("Invalid folds:\n" + "\n".join(problems))
+
+    def _validate_fold_weights(
+        self, weights: npt.ArrayLike, N: int
+    ) -> Tuple[np.ndarray, int]:
+        """
+        Casts the weights to `dtype` on the host and checks them for `validate_folds`
+        with the same shape rule as `fit` and for non-negativity.
+
+        Returns
+        -------
+        Tuple of two elements.
+            The weights as a 1-D NumPy array of length `N` and their number of
+            non-zero elements.
+        """
+        weights = np.asarray(weights, dtype=self.dtype)
+        if weights.ndim == 1:
+            weights = weights.reshape(-1, 1)
+        if weights.shape != (N, 1):
+            raise ValueError(_WEIGHTS_SHAPE_MSG.format(N=N, shape=weights.shape))
+        weights = weights.reshape(-1)
+        if np.any(weights < 0):
+            raise ValueError("Weights must be non-negative.")
+        return weights, int(np.count_nonzero(weights))
+
+    @staticmethod
+    def _fold_items(
+        folds: Union[
+            Partitioner, Mapping[Hashable, npt.ArrayLike], Iterable[npt.ArrayLike]
+        ],
+    ) -> Iterable[Tuple[Hashable, np.ndarray]]:
+        """
+        Yields the name and the validation indices, as a NumPy array, of each fold for
+        `validate_folds`. NumPy scalar fold names, e.g., a Partitioner's, are converted
+        to Python scalars, and empty folds get an integer dtype.
+        """
         if isinstance(folds, Partitioner):
             folds = folds.folds_dict
         if getattr(folds, "ndim", None) == 1:
@@ -773,59 +812,66 @@ class CVMatrix:
                 "Partitioner(folds) for per-sample fold labels."
             )
         fold_items = folds.items() if isinstance(folds, Mapping) else enumerate(folds)
-        problems = []
         for fold, val_indices in fold_items:
-            if isinstance(fold, np.generic):  # E.g., Partitioner's np.int64 folds.
+            if isinstance(fold, np.generic):
                 fold = fold.item()
             val_indices = np.asarray(val_indices)
-            if val_indices.ndim != 1:
-                problems.append(
-                    f"Fold {fold!r}: the validation indices must be a 1-D array, but "
-                    f"they have {val_indices.ndim} dimensions."
-                )
-                continue
-            if val_indices.dtype.kind not in "iu":
-                if val_indices.size:
-                    problems.append(
-                        f"Fold {fold!r}: the validation indices must be integers, but "
-                        f"they have dtype {val_indices.dtype}."
-                    )
-                    continue
-                val_indices = val_indices.astype(np.intp)  # An empty fold, e.g., [].
-            if val_indices.size and (val_indices.min() < 0 or val_indices.max() >= N):
-                problems.append(
-                    f"Fold {fold!r}: the validation indices must be in the range 0 to "
-                    f"{N - 1}."
-                )
-                continue
-            if np.unique(val_indices).size != val_indices.size:
-                problems.append(
-                    f"Fold {fold!r}: the validation indices contain duplicates, which "
-                    "would remove a sample from the training set more than once."
-                )
-                continue
-            if not needs_stats:
-                continue
-            if weights is None:
-                num_nonzero_w_train = N - val_indices.size
-            else:
-                num_nonzero_w_train = num_nonzero_w - int(
-                    np.count_nonzero(weights[val_indices])
-                )
-            # The same conditions as `_get_sum_w_train_and_num_nonzero_w_train` and
-            # `_compute_std_divisor`.
-            if num_nonzero_w_train < 1:
-                problems.append(
-                    f"Fold {fold!r}: {_NO_NONZERO_WEIGHTS_MSG} It is "
-                    f"{num_nonzero_w_train}."
-                )
-            elif needs_std and num_nonzero_w_train <= self.ddof:
-                problems.append(
-                    f"Fold {fold!r}: {_TOO_FEW_NONZERO_WEIGHTS_MSG} It is "
-                    f"{num_nonzero_w_train}, and `ddof` is {self.ddof}."
-                )
-        if problems:
-            raise ValueError("Invalid folds:\n" + "\n".join(problems))
+            if val_indices.size == 0:
+                val_indices = val_indices.astype(np.intp)  # E.g., [] is float64.
+            yield fold, val_indices
+
+    @staticmethod
+    def _fold_index_problem(val_indices: np.ndarray, N: int) -> Optional[str]:
+        """
+        Returns why the validation indices of a fold are invalid for
+        `validate_folds`, or `None` if they are valid: they must be a 1-D array of
+        unique integers in the range 0 to `N` - 1.
+        """
+        if val_indices.ndim != 1:
+            return (
+                "the validation indices must be a 1-D array, but they have "
+                f"{val_indices.ndim} dimensions."
+            )
+        if val_indices.dtype.kind not in "iu":
+            return (
+                "the validation indices must be integers, but they have dtype "
+                f"{val_indices.dtype}."
+            )
+        if val_indices.size and (val_indices.min() < 0 or val_indices.max() >= N):
+            return f"the validation indices must be in the range 0 to {N - 1}."
+        if np.unique(val_indices).size != val_indices.size:
+            return (
+                "the validation indices contain duplicates, which would remove a "
+                "sample from the training set more than once."
+            )
+        return None
+
+    def _fold_count_problem(
+        self,
+        val_indices: np.ndarray,
+        weights: Optional[np.ndarray],
+        num_nonzero_w: int,
+        needs_std: bool,
+    ) -> Optional[str]:
+        """
+        Returns why the training set of a fold is degenerate for `validate_folds`, or
+        `None` if it is not. The same conditions as
+        `_get_sum_w_train_and_num_nonzero_w_train` and `_compute_std_divisor`.
+        """
+        if weights is None:
+            num_nonzero_w_train = num_nonzero_w - val_indices.size
+        else:
+            num_nonzero_w_train = num_nonzero_w - int(
+                np.count_nonzero(weights[val_indices])
+            )
+        if num_nonzero_w_train < 1:
+            return f"{_NO_NONZERO_WEIGHTS_MSG} It is {num_nonzero_w_train}."
+        if needs_std and num_nonzero_w_train <= self.ddof:
+            return (
+                f"{_TOO_FEW_NONZERO_WEIGHTS_MSG} It is {num_nonzero_w_train}, and "
+                f"`ddof` is {self.ddof}."
+            )
+        return None
 
     def _as_scalar(self, x):
         """
@@ -1661,6 +1707,29 @@ class CVMatrix:
         else:
             self.XTY = None
 
+    def _init_weight_stats(self) -> Tuple[Scalar, Union[int, np.integer, Array]]:
+        """
+        Computes the sum and the number of non-zero elements of the weights. If
+        jax.jit staged the count of concrete weights, e.g., closed over, they are
+        counted once more at trace time, so that the count is concrete and the
+        per-fold checks need to count only the validation rows (see
+        `_get_sum_w_train_and_num_nonzero_w_train`).
+
+        Returns
+        -------
+        Tuple of two elements.
+            The sum of the weights and their number of non-zero elements.
+        """
+        num_nonzero_w = self.xp.count_nonzero(self.weights)
+        if isinstance(num_nonzero_w, _TRACER_TYPES) and not isinstance(
+            self.weights, _TRACER_TYPES
+        ):
+            import jax
+
+            with jax.ensure_compile_time_eval():
+                num_nonzero_w = int(self.xp.count_nonzero(self.weights))
+        return self.xp.sum(self.weights), num_nonzero_w
+
     def _init_stats(self) -> None:
         """
         Initializes the global statistics for `X` and `Y`. The statistics of `Y` and
@@ -1669,19 +1738,7 @@ class CVMatrix:
         """
         if self.center_X or self.center_Y or self.scale_X or self.scale_Y:
             if self.weights is not None:
-                self.sum_w = self.xp.sum(self.weights)
-                self.num_nonzero_w = self.xp.count_nonzero(self.weights)
-                if isinstance(self.num_nonzero_w, _TRACER_TYPES) and not isinstance(
-                    self.weights, _TRACER_TYPES
-                ):
-                    # jax.jit staged the count of concrete weights, e.g., closed over:
-                    # count them once at trace time, so that the per-fold checks need
-                    # to count only the validation rows (see
-                    # `_get_sum_w_train_and_num_nonzero_w_train`).
-                    import jax
-
-                    with jax.ensure_compile_time_eval():
-                        self.num_nonzero_w = int(self.xp.count_nonzero(self.weights))
+                self.sum_w, self.num_nonzero_w = self._init_weight_stats()
             else:
                 self.sum_w = self.N
                 self.num_nonzero_w = self.N
