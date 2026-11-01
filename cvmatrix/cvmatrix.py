@@ -12,10 +12,13 @@ E-mail: ocge@foss.dk
 
 from __future__ import annotations
 
+from collections.abc import Hashable, Iterable, Mapping
 from typing import Literal, Optional, Tuple, Union
 
 import numpy as np
 from numpy import typing as npt
+
+from .partitioner import Partitioner
 
 # Array/scalar type aliases. NumPy is the only required dependency, so JAX is NEVER
 # imported at module load -- ``import cvmatrix`` stays JAX-free even when JAX is
@@ -40,8 +43,23 @@ FloatDType = npt.DTypeLike
 # validate like the numpy backend.
 _TRACER_TYPES: tuple = ()
 
+# The degenerate-fold errors. The training methods and `CVMatrix.validate_folds` use the
+# same messages and conditions: a training set needs at least one non-zero weight
+# (count < 1 is rejected), and more than `ddof` of them for standard deviations.
+_NO_NONZERO_WEIGHTS_MSG = (
+    "The number of non-zero weights in the training set must be greater than zero."
+)
+_TOO_FEW_NONZERO_WEIGHTS_MSG = (
+    "The number of non-zero weights in the training set must be greater than `ddof`."
+)
+# The weight-shape error of `fit` and `CVMatrix.validate_folds`, which share the rule.
+_WEIGHTS_SHAPE_MSG = (
+    "`weights` must have shape (N,) or (N, 1), with N = {N}, but it has shape {shape} "
+    "(1-D weights are reshaped to (n, 1))."
+)
 
-def _enable_jax_typing() -> None:
+
+def _enable_jax_typing() -> None:  # pragma: has-jax
     """Broaden the array/scalar aliases and tracer types to admit JAX values.
 
     Called (idempotently) when the JAX backend is resolved. Kept out of module
@@ -85,7 +103,7 @@ def _resolve_backend(backend: str):
     """
     if backend == "numpy":
         return np
-    if backend == "jax":
+    if backend == "jax":  # pragma: has-jax
         try:
             import jax.numpy as jnp
         except ImportError as e:  # pragma: no cover - exercised only without jax
@@ -197,7 +215,10 @@ class CVMatrix:
         is installed with `pip install cvmatrix[jax]`; otherwise, an `ImportError` is
         raised. If `"jax"` is used with a 64-bit `dtype`, JAX's 64-bit mode
         (`jax_enable_x64`) is enabled globally so that `dtype` is honored instead of
-        being truncated to 32 bits.
+        being truncated to 32 bits. If you construct the `CVMatrix` inside a function
+        traced by `jax.jit` or `jax.vmap`, enable 64-bit mode before tracing, e.g.,
+        with `jax.config.update("jax_enable_x64", True)`, because JAX fixes the input
+        dtypes when tracing starts.
 
     compute_XTX : bool, optional, default=True
         Whether `fit` computes the dataset-wide
@@ -297,6 +318,23 @@ class CVMatrix:
             Weights for each sample in `X` and `Y`. If `None`, no weights are used in
             the computations. If provided, the weights must be non-negative.
 
+            With `backend="jax"`, `weights` may be traced by `jax.jit` or `jax.vmap`,
+            e.g., to vmap over datasets that each have their own weights. Traced
+            weights cannot be validated, so the caller must check, on the concrete
+            weights before tracing (e.g., with `validate_folds`), that they are
+            non-negative and that the training set of each fold has at least one
+            non-zero weight if `center_X`, `center_Y`, `scale_X`, or `scale_Y` is
+            `True`, and more than `ddof` if `scale_X` or `scale_Y` is `True`.
+            Otherwise, the results are silently wrong or NaN. The degenerate-fold
+            checks of the training methods are skipped whenever the weights or, with
+            weights, the validation indices are traced, as a fold's count of non-zero
+            training weights is then unknown while tracing. Without weights, the count
+            is the training-set size, which is known while tracing, so these checks
+            always run. Concrete weights and validation indices are checked as in
+            eager execution, even inside `jax.jit`, e.g., when they are closed over.
+            Call `fit` inside the traced function and use the fitted instance only
+            there, as its attributes then hold tracers.
+
         Attributes
         ----------
         X : Array
@@ -388,7 +426,13 @@ class CVMatrix:
         Raises
         ------
         ValueError
-            If `weights` is provided and contains negative values.
+            - If `X` or `Y` is not 1-D or 2-D, or if `Y` or `weights` does not have as
+              many rows as `X`.
+            - If `weights` is provided and contains negative values. This is not
+              checked for traced weights (see `weights`). Concrete weights are checked
+              even inside `jax.jit`.
+
+            A previously fitted instance is then left unchanged.
         """
         self._init_mats(X, Y, weights)
         self._init_weighted_mats()
@@ -649,6 +693,186 @@ class CVMatrix:
             return_Y_std=self.scale_Y and self.Y is not None,
         )[:-1]  # Exclude the sum of training weights from the return tuple
 
+    def validate_folds(
+        self,
+        folds: Union[
+            Partitioner, Mapping[Hashable, npt.ArrayLike], Iterable[npt.ArrayLike]
+        ],
+        N: int,
+        weights: Optional[npt.ArrayLike] = None,
+    ) -> None:
+        """
+        Checks folds and weights on the host before they are traced by `jax.jit` or
+        `jax.vmap`. The training methods cannot check traced weights, or traced
+        validation indices with weights, so this performs their checks on the concrete
+        values instead, using this instance's `center_X`, `center_Y`, `scale_X`,
+        `scale_Y`, `ddof`, and `dtype`. The instance does not need to be fitted, and
+        the checks run with NumPy for both backends.
+
+        Parameters
+        ----------
+        folds : Partitioner, mapping, or iterable
+            The validation indices of each fold: a
+            cvmatrix.partitioner.Partitioner, a mapping from each fold to its
+            validation indices, or an iterable of validation index arrays, e.g., the
+            2-D array of shape (n_folds, N_val) that is batched over with `jax.vmap`.
+            In the last case, the folds are named by their position. Each fold's
+            validation indices must be a 1-D array, so per-sample fold labels must be
+            passed as a Partitioner.
+
+        N : int
+            The number of samples in the dataset.
+
+        weights : None or array-like of shape (N,) or (N, 1), optional, default=None
+            The concrete weights for each sample, or `None` if no weights are used.
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        ValueError
+            - If `weights` does not have `N` elements or contains negative values
+              after the cast to `dtype`.
+            - If `folds` is a 1-D array, or any fold's validation indices are not a
+              1-D array.
+            - If any fold has validation indices outside 0 to `N` - 1. JAX silently
+              clamps such indices under tracing.
+            - If any fold has duplicate validation indices, which would remove a
+              sample from the training set more than once and silently give wrong
+              training matrices and statistics.
+            - If `center_X`, `center_Y`, `scale_X`, or `scale_Y` is `True` and the
+              training set of any fold has no non-zero weights.
+            - If `scale_X` or `scale_Y` is `True` and the training set of any fold
+              does not have more than `ddof` non-zero weights.
+
+            Every failing fold is listed in the error message. The training-set checks
+            are those that any of the training methods may perform, so a fold can be
+            rejected that a particular training method would accept.
+        """
+        if weights is not None:
+            weights, num_nonzero_w = self._validate_fold_weights(weights, N)
+        else:
+            num_nonzero_w = N
+        needs_stats = self.center_X or self.center_Y or self.scale_X or self.scale_Y
+        needs_std = self.scale_X or self.scale_Y
+        problems = []
+        for fold, val_indices in self._fold_items(folds):
+            problem = self._fold_index_problem(val_indices, N)
+            if problem is None and needs_stats:
+                problem = self._fold_count_problem(
+                    val_indices, weights, num_nonzero_w, needs_std
+                )
+            if problem is not None:
+                problems.append(f"Fold {fold!r}: {problem}")
+        if problems:
+            raise ValueError("Invalid folds:\n" + "\n".join(problems))
+
+    def _validate_fold_weights(
+        self, weights: npt.ArrayLike, N: int
+    ) -> Tuple[np.ndarray, int]:
+        """
+        Casts the weights to `dtype` on the host and checks them for `validate_folds`
+        with the same shape rule as `fit` and for non-negativity.
+
+        Returns
+        -------
+        Tuple of two elements.
+            The weights as a 1-D NumPy array of length `N` and their number of
+            non-zero elements.
+        """
+        weights = np.asarray(weights, dtype=self.dtype)
+        if weights.ndim == 1:
+            weights = weights.reshape(-1, 1)
+        if weights.shape != (N, 1):
+            raise ValueError(_WEIGHTS_SHAPE_MSG.format(N=N, shape=weights.shape))
+        weights = weights.reshape(-1)
+        if np.any(weights < 0):
+            raise ValueError("Weights must be non-negative.")
+        return weights, int(np.count_nonzero(weights))
+
+    @staticmethod
+    def _fold_items(
+        folds: Union[
+            Partitioner, Mapping[Hashable, npt.ArrayLike], Iterable[npt.ArrayLike]
+        ],
+    ) -> Iterable[Tuple[Hashable, np.ndarray]]:
+        """
+        Yields the name and the validation indices, as a NumPy array, of each fold for
+        `validate_folds`. NumPy scalar fold names, e.g., a Partitioner's, are converted
+        to Python scalars, and empty folds get an integer dtype.
+        """
+        if isinstance(folds, Partitioner):
+            folds = folds.folds_dict
+        if getattr(folds, "ndim", None) == 1:
+            raise ValueError(
+                "`folds` is a 1-D array, but each fold needs a 1-D array of validation "
+                "indices. Pass [validation_indices] for a single fold, or "
+                "Partitioner(folds) for per-sample fold labels."
+            )
+        fold_items = folds.items() if isinstance(folds, Mapping) else enumerate(folds)
+        for fold, val_indices in fold_items:
+            if isinstance(fold, np.generic):
+                fold = fold.item()
+            val_indices = np.asarray(val_indices)
+            if val_indices.size == 0:
+                val_indices = val_indices.astype(np.intp)  # E.g., [] is float64.
+            yield fold, val_indices
+
+    @staticmethod
+    def _fold_index_problem(val_indices: np.ndarray, N: int) -> Optional[str]:
+        """
+        Returns why the validation indices of a fold are invalid for
+        `validate_folds`, or `None` if they are valid: they must be a 1-D array of
+        unique integers in the range 0 to `N` - 1.
+        """
+        if val_indices.ndim != 1:
+            return (
+                "the validation indices must be a 1-D array, but they have "
+                f"{val_indices.ndim} dimensions."
+            )
+        if val_indices.dtype.kind not in "iu":
+            return (
+                "the validation indices must be integers, but they have dtype "
+                f"{val_indices.dtype}."
+            )
+        if val_indices.size and (val_indices.min() < 0 or val_indices.max() >= N):
+            return f"the validation indices must be in the range 0 to {N - 1}."
+        if np.unique(val_indices).size != val_indices.size:
+            return (
+                "the validation indices contain duplicates, which would remove a "
+                "sample from the training set more than once."
+            )
+        return None
+
+    def _fold_count_problem(
+        self,
+        val_indices: np.ndarray,
+        weights: Optional[np.ndarray],
+        num_nonzero_w: int,
+        needs_std: bool,
+    ) -> Optional[str]:
+        """
+        Returns why the training set of a fold is degenerate for `validate_folds`, or
+        `None` if it is not. The same conditions as
+        `_get_sum_w_train_and_num_nonzero_w_train` and `_compute_std_divisor`.
+        """
+        if weights is None:
+            num_nonzero_w_train = num_nonzero_w - val_indices.size
+        else:
+            num_nonzero_w_train = num_nonzero_w - int(
+                np.count_nonzero(weights[val_indices])
+            )
+        if num_nonzero_w_train < 1:
+            return f"{_NO_NONZERO_WEIGHTS_MSG} It is {num_nonzero_w_train}."
+        if needs_std and num_nonzero_w_train <= self.ddof:
+            return (
+                f"{_TOO_FEW_NONZERO_WEIGHTS_MSG} It is {num_nonzero_w_train}, and "
+                f"`ddof` is {self.ddof}."
+            )
+        return None
+
     def _as_scalar(self, x):
         """
         Cast a scalar-valued result to the configured dtype.
@@ -660,7 +884,7 @@ class CVMatrix:
         """
         if self.backend == "numpy":
             return self.dtype(x)
-        return x
+        return x  # pragma: has-jax
 
     def _get_sum_w_train_and_num_nonzero_w_train(
         self, val_indices: IndexArray
@@ -688,21 +912,42 @@ class CVMatrix:
         if self.weights is None:
             sum_w_val = val_indices.size
             sum_w_train = self._as_scalar(self.sum_w - sum_w_val)
-            return (sum_w_train, sum_w_train)
-        w_val = self.weights[val_indices]
-        sum_w_val = xp.sum(w_val)
-        sum_w_train = self._as_scalar(self.sum_w - sum_w_val)
-        num_nonzero_w_val = xp.count_nonzero(w_val)
-        num_nonzero_w_train = self._as_scalar(self.num_nonzero_w - num_nonzero_w_val)
-        # Validate eagerly (numpy, or concrete/eager jax). Under jax.jit/vmap tracing the
-        # input `val_indices` is a tracer (in both the weighted and unweighted paths), so
-        # we skip the data-dependent raise; degenerate folds are then expected to be
-        # rejected by a host-side pre-flight before vmap.
-        if not isinstance(val_indices, _TRACER_TYPES) and num_nonzero_w_train == 0:
-            raise ValueError(
-                "The number of non-zero weights in the training set must be "
-                "greater than zero."
+            # The training-set size is static even under jax.jit/vmap, as array shapes
+            # are, so the checks here and in `_compute_std_divisor` always run.
+            num_nonzero_w_train = sum_w_train
+        else:
+            w_val = self.weights[val_indices]
+            sum_w_val = xp.sum(w_val)
+            sum_w_train = self._as_scalar(self.sum_w - sum_w_val)
+            num_nonzero_w_val = xp.count_nonzero(w_val)
+            num_nonzero_w_train = self._as_scalar(
+                self.num_nonzero_w - num_nonzero_w_val
             )
+            if (  # pragma: has-jax
+                isinstance(num_nonzero_w_train, _TRACER_TYPES)
+                and not isinstance(self.weights, _TRACER_TYPES)
+                and not isinstance(val_indices, _TRACER_TYPES)
+            ):
+                # jax.jit staged the count of concrete weights and indices: count the
+                # validation rows again at trace time (O(N_val), as the dataset count
+                # is already concrete; see `_init_stats`), so that the checks here and
+                # in `_compute_std_divisor` run as in eager execution. Converting to a
+                # Python int keeps the comparisons below from being staged as well.
+                import jax
+
+                with jax.ensure_compile_time_eval():
+                    num_nonzero_w_train = int(
+                        self.num_nonzero_w
+                        - xp.count_nonzero(self.weights[val_indices])
+                    )
+        # The count is a tracer only if the weights or, with weights, `val_indices` are
+        # traced by jax.jit/vmap. Then the check is deferred to a host-side pre-flight
+        # on the concrete weights and indices before tracing.
+        if (
+            not isinstance(num_nonzero_w_train, _TRACER_TYPES)
+            and num_nonzero_w_train < 1  # Also negative, e.g., for duplicate indices.
+        ):
+            raise ValueError(_NO_NONZERO_WEIGHTS_MSG)
         return sum_w_train, num_nonzero_w_train
 
     def _compute_training_stats(
@@ -773,14 +1018,15 @@ class CVMatrix:
             and not return_Y_std
         ):
             return None, None, None, None, None
-        # Under jax.jit/vmap, `val_indices` is a tracer; data-dependent validity raises
-        # are then deferred to a host-side pre-flight (see `_get_sum_w_train_*` and
-        # `_compute_std_divisor`). The unweighted path derives its counts from static
-        # shapes, so it cannot rely on the count itself being a tracer.
-        traced = isinstance(val_indices, _TRACER_TYPES)
         sum_w_train, num_nonzero_w_train = (
             self._get_sum_w_train_and_num_nonzero_w_train(val_indices)
         )
+        # Under jax.jit/vmap, the count is a tracer if the weights or, with weights,
+        # `val_indices` are traced; data-dependent validity raises are then deferred to
+        # a host-side pre-flight (see `_get_sum_w_train_*` and `_compute_std_divisor`).
+        # Without weights, the count is the static training-set size, so it is never a
+        # tracer and the checks always run.
+        traced = isinstance(num_nonzero_w_train, _TRACER_TYPES)
         if return_X_mean or return_X_std:
             sum_X_val = self.xp.sum(X_val, axis=0, keepdims=True)
             sum_X_train = self._compute_train_mat_sum(sum_X_val, self.sum_X)
@@ -1208,24 +1454,22 @@ class CVMatrix:
             The number of non-zero weights in the training set.
 
         traced : bool, default=False
-            Whether the computation is being traced by jax.jit/jax.vmap. When True, the
-            data-dependent degenerate-fold check is skipped (deferred to a host-side
-            pre-flight); a non-positive divisor then degrades gracefully via the clamp in
-            `_compute_training_mat_std`.
+            Whether `num_nonzero_w_train` is a tracer, i.e., only known when the
+            computation traced by jax.jit/jax.vmap runs: if the weights or, with
+            weights, `val_indices` are traced. When True, the data-dependent
+            degenerate-fold check is skipped (deferred to a host-side pre-flight); a
+            degenerate fold then gives inf or NaN standard deviations.
 
         Returns
         -------
         float
             The divisor for the standard deviation calculation.
         """
-        # Validate eagerly (numpy, or concrete/eager jax). Under jax.jit/vmap tracing
-        # (`traced`, detected from the input `val_indices`) the check is deferred to a
-        # host-side pre-flight before vmap.
+        # Validate eagerly (numpy, or concrete/eager jax). If the count is traced by
+        # jax.jit/vmap (`traced`), the check is deferred to a host-side pre-flight on the
+        # concrete indices and weights before tracing.
         if not traced and num_nonzero_w_train <= self.ddof:
-            raise ValueError(
-                "The number of non-zero weights in the training set must be greater "
-                "than `ddof`."
-            )
+            raise ValueError(_TOO_FEW_NONZERO_WEIGHTS_MSG)
         return (num_nonzero_w_train - self.ddof) * sum_w_train / num_nonzero_w_train
 
     def _compute_training_mat_std(
@@ -1288,19 +1532,21 @@ class CVMatrix:
         so that `dtype` is honored instead of being silently truncated to float32.
         """
         self.xp = _resolve_backend(self.backend)
-        if self.backend == "jax" and np.dtype(self.dtype).itemsize >= 8:
+        if (  # pragma: has-jax
+            self.backend == "jax" and np.dtype(self.dtype).itemsize >= 8
+        ):
             import jax
 
             jax.config.update("jax_enable_x64", True)
 
-    def _init_mat(self, mat: Array) -> Array:
+    def _init_mat(self, mat: npt.ArrayLike) -> Array:
         """
         Casts the matrix to the dtype specified in the constructor and reshapes it if
         the matrix is one-dimensional.
 
         Parameters
         ----------
-        mat : Array of shape (N, K) or (N, M) or (N,)
+        mat : Array-like of shape (N, K) or (N, M) or (N,)
             The matrix to be initialized.
 
         Returns
@@ -1338,22 +1584,86 @@ class CVMatrix:
         weights : None or array-like of shape (N,) or (N, 1), optional, default=None
             Weights for each sample in `X` and `Y`. If `None`, no weights are used in
             the computations.
-        """
-        self.X = self._init_mat(X)
-        self.N, self.K = self.X.shape
-        if Y is not None:
-            self.Y = self._init_mat(Y)
-            self.M = self.Y.shape[1]
-        else:
-            self.Y = None
-            self.M = None
 
+        Raises
+        ------
+        ValueError
+            If `X` or `Y` is not 1-D or 2-D, if `Y` or `weights` does not have as many
+            rows as `X`, or if `weights` contains negative values. The instance is then
+            left unchanged.
+        """
+        X = self._init_mat(X)
+        try:
+            N, K = X.shape
+        except ValueError:
+            raise ValueError(
+                f"`X` must be 1-D or 2-D, but it has {X.ndim} dimensions."
+            ) from None
+        M = None
+        if Y is not None:
+            Y = self._init_mat(Y)
+            try:
+                N_Y, M = Y.shape
+            except ValueError:
+                raise ValueError(
+                    f"`Y` must be 1-D or 2-D, but it has {Y.ndim} dimensions."
+                ) from None
+            if N_Y != N:
+                raise ValueError(f"`Y` has {N_Y} rows, but `X` has {N}.")
         if weights is not None:
-            self.weights = self._init_mat(weights)
-            if bool(self.xp.any(self.weights < 0)):
+            init_weights = self._init_mat(weights)
+            if init_weights.shape != (N, 1):
+                # The shape of the initialized weights is static, also under tracing.
+                raise ValueError(
+                    _WEIGHTS_SHAPE_MSG.format(N=N, shape=tuple(init_weights.shape))
+                )
+            negative = self.xp.any(init_weights < 0)
+            if isinstance(negative, _TRACER_TYPES):  # pragma: has-jax
+                if not isinstance(weights, _TRACER_TYPES):
+                    # jax.jit staged weights that are possibly concrete, e.g., closed
+                    # over.
+                    init_weights, negative = self._init_weights_at_trace_time(weights)
+                # `negative` is still a tracer only for traced weights, which the
+                # caller validates before tracing (see `fit`).
+                negative = not isinstance(negative, _TRACER_TYPES) and bool(negative)
+            if negative:
                 raise ValueError("Weights must be non-negative.")
-        else:
-            self.weights = None
+            weights = init_weights
+        # Assign only after validation, so that a fit that raises leaves a previously
+        # fitted instance unchanged.
+        self.X = X
+        self.N, self.K = N, K
+        self.Y = Y
+        self.M = M
+        self.weights = weights
+
+    def _init_weights_at_trace_time(  # pragma: has-jax
+        self, weights: npt.ArrayLike
+    ) -> Tuple[Array, Array]:
+        """
+        Initializes the weights like `_init_mat` and checks whether any is negative,
+        both under `jax.ensure_compile_time_eval()`. Used when jax.jit has staged the
+        weights into tracers although they may be concrete, e.g., when closed over:
+        concrete weights then stay concrete and are validated as in eager execution,
+        here and per fold. Traced weights, e.g., a list of traced scalars, stay traced,
+        and so does the returned check. Only called while jax.jit is tracing, so eager
+        execution does not pay for the context manager.
+
+        Parameters
+        ----------
+        weights : Array-like of shape (N,) or (N, 1)
+            Weights for each sample in `X` and `Y`.
+
+        Returns
+        -------
+        Tuple of two elements.
+            The initialized weights of shape (N, 1) and whether any of them is negative.
+        """
+        import jax
+
+        with jax.ensure_compile_time_eval():
+            weights = self._init_mat(weights)
+            return weights, self.xp.any(weights < 0)
 
     @property
     def _needs_Y_stats(self) -> bool:
@@ -1399,6 +1709,30 @@ class CVMatrix:
         else:
             self.XTY = None
 
+    def _init_weight_stats(self) -> Tuple[Scalar, Union[int, np.integer, Array]]:
+        """
+        Computes the sum and the number of non-zero elements of the weights. If
+        jax.jit staged the count of concrete weights, e.g., closed over, they are
+        counted once more at trace time, so that the count is concrete and the
+        per-fold checks need to count only the validation rows (see
+        `_get_sum_w_train_and_num_nonzero_w_train`).
+
+        Returns
+        -------
+        Tuple of two elements.
+            The sum of the weights and their number of non-zero elements.
+        """
+        num_nonzero_w = self.xp.count_nonzero(self.weights)
+        if (  # pragma: has-jax
+            isinstance(num_nonzero_w, _TRACER_TYPES)
+            and not isinstance(self.weights, _TRACER_TYPES)
+        ):
+            import jax
+
+            with jax.ensure_compile_time_eval():
+                num_nonzero_w = int(self.xp.count_nonzero(self.weights))
+        return self.xp.sum(self.weights), num_nonzero_w
+
     def _init_stats(self) -> None:
         """
         Initializes the global statistics for `X` and `Y`. The statistics of `Y` and
@@ -1407,8 +1741,7 @@ class CVMatrix:
         """
         if self.center_X or self.center_Y or self.scale_X or self.scale_Y:
             if self.weights is not None:
-                self.sum_w = self.xp.sum(self.weights)
-                self.num_nonzero_w = self.xp.count_nonzero(self.weights)
+                self.sum_w, self.num_nonzero_w = self._init_weight_stats()
             else:
                 self.sum_w = self.N
                 self.num_nonzero_w = self.N

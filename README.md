@@ -90,6 +90,43 @@ import jax
 jax.config.update("jax_enable_x64", True)
 ```
 
+### Validating weights and folds before tracing
+
+Under `jax.jit` and `jax.vmap`, traced values are unknown until the compiled computation
+runs, so `CVMatrix` cannot raise for traced weights or, with weights, for traced fold
+indices. Checking inside the computation would slow down every call, so `CVMatrix`
+instead checks everything that is known while tracing (concrete weights and fold
+indices, and the training-set size of every fold without weights) and leaves the rest
+to `validate_folds`, which you call once on the concrete values before tracing. Without
+it, invalid weights or folds silently give wrong or NaN results.
+
+```python
+import jax
+import jax.numpy as jnp
+import numpy as np
+from cvmatrix import CVMatrix, Partitioner
+
+jax.config.update("jax_enable_x64", True)  # Before tracing, for float64.
+
+rng = np.random.default_rng(42)
+X = rng.random((8, 100, 5))  # 8 datasets of 100 samples each.
+Y = rng.random((8, 100, 2))
+W = rng.random((8, 100))  # One weight vector per dataset.
+p = Partitioner(np.arange(100) % 5)  # 5 equal-size folds, shared by all datasets.
+val_indices = jnp.asarray(np.stack(list(p.folds_dict.values())))
+
+# Check the concrete weights and folds on the host, before they are traced.
+for weights in W:
+    CVMatrix(backend="jax").validate_folds(p, 100, weights)
+
+def per_dataset(x, y, w):
+    cvm = CVMatrix(backend="jax")
+    cvm.fit(x, y, w)  # `w` is traced here, so it cannot be checked.
+    return jax.vmap(cvm.training_XTX_XTY)(val_indices)
+
+(XTX, XTY), stats = jax.jit(jax.vmap(per_dataset))(X, Y, W)
+```
+
 ## Quick Start
 
 ### Use the cvmatrix package for fast computation of training set kernel matrices

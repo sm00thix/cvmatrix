@@ -394,6 +394,16 @@ class TestClass:
         """
         return Partitioner(folds)
 
+    @staticmethod
+    def leaves(result) -> list:
+        """
+        Flattens the possibly nested tuple returned by a CVMatrix training method into
+        a list of its arrays and `None`s.
+        """
+        if isinstance(result, tuple):
+            return [leaf for r in result for leaf in TestClass.leaves(r)]
+        return [result]
+
     def check_equivalent_stats(
         self,
         naive_stats: Union[None, npt.NDArray[np.float64]],
@@ -655,13 +665,14 @@ class TestClass:
                 assert_allclose(np.asarray(Ym_b[i]), Ym, atol=1e-8, rtol=1e-8)
                 assert_allclose(np.asarray(Ys_b[i]), Ys, atol=1e-8, rtol=1e-8)
 
-    def test_jax_trace_defers_degenerate_check(self):
+    def test_jax_trace_degenerate_folds(self):
         """
-        Under jax.jit/jax.vmap, the data-dependent degenerate-fold ValueError must be
-        skipped (deferred to a host-side pre-flight); eager execution must still raise.
-        This guards the UNWEIGHTED path specifically, where the training-set count is a
-        static int (not a tracer) and so the skip must key on the input `val_indices`
-        being a tracer rather than on the count.
+        Tests the degenerate-fold checks with validation indices traced by
+        jax.jit/jax.vmap. Without weights, the training-set size is static while
+        tracing, so degenerate folds raise as in eager execution: an empty training
+        set, and one with no more samples than `ddof`. With weights, the fold's count
+        of non-zero training weights depends on the traced indices, so the checks are
+        deferred to a host-side pre-flight and tracing must complete without raising.
         """
         if getattr(self, "backend", "numpy") != "jax":
             pytest.skip("JAX-specific trace test; runs under the jax parametrization.")
@@ -671,20 +682,435 @@ class TestClass:
 
         X = self.load_X()[:6, :4]
         Y = self.load_Y(["Protein"])[:6]
-        cvm = CVMatrix(
-            center_X=True, center_Y=True, scale_X=True, scale_Y=True,
-            ddof=1, backend="jax",
-        )
-        cvm.fit(X, Y, None)  # unweighted
-        # A degenerate fold: validating on 5 of 6 rows leaves 1 training sample (<= ddof).
-        degenerate_val = np.arange(5)
-        # Eager (concrete) execution validates and raises.
+        # Validating on all 6 rows leaves no training samples; validating on 5 leaves 1,
+        # which is not more than ddof=1.
+        for degenerate_val, match in (
+            (np.arange(6), "greater than zero"),
+            (np.arange(5), "greater than `ddof`"),
+        ):
+            cvm = CVMatrix(ddof=1, backend="jax")
+            cvm.fit(X, Y, None)  # unweighted
+            with pytest.raises(ValueError, match=match):
+                cvm.training_XTX_XTY(degenerate_val)
+            with pytest.raises(ValueError, match=match):
+                jax.jit(cvm.training_XTX_XTY)(jnp.asarray(degenerate_val))
+            with pytest.raises(ValueError, match=match):
+                jax.vmap(cvm.training_XTX_XTY)(jnp.asarray(degenerate_val)[None])
+
+        weights = np.ones(6)
+        weights[5] = 0.0  # Only 1 non-zero training weight when validating on 4 rows.
+        cvm = CVMatrix(ddof=1, backend="jax")
+        cvm.fit(X, Y, weights)
         with pytest.raises(ValueError, match="greater than `ddof`"):
-            cvm.training_XTX_XTY(degenerate_val)
-        # Under jit, val_indices is a tracer: the check is deferred, so tracing must
-        # complete without raising (the degenerate std degrades via the clamp).
-        (XTWX, _), _ = jax.jit(cvm.training_XTX_XTY)(jnp.asarray(degenerate_val))
+            cvm.training_XTX_XTY(np.arange(4))
+        (XTWX, _), _ = jax.jit(cvm.training_XTX_XTY)(jnp.arange(4))  # Deferred.
         assert XTWX.shape == (4, 4)
+
+    def test_jax_traced_weights(self):
+        """
+        Tests sample weights traced by jax.vmap/jax.jit, e.g., per-dataset weights when
+        vmapping over datasets: CVMatrix is fitted inside the traced function. All
+        training matrices and statistics must match eager per-dataset computation,
+        with centering and scaling and ddof 0 and 1, for: per-dataset validation
+        indices vmapped over folds under jit(vmap); shared concrete indices closed
+        over; per-fold calls with concrete indices inside a vmap over the weights; and
+        concrete weights closed over inside jax.jit.
+        """
+        if getattr(self, "backend", "numpy") != "jax":
+            pytest.skip("JAX-specific trace test; runs under the jax parametrization.")
+        pytest.importorskip("jax")
+        import jax
+        import jax.numpy as jnp
+
+        # As for users, JAX's 64-bit mode must be on before tracing starts, because
+        # jax.jit fixes the input dtypes then; a CVMatrix constructed inside the traced
+        # function enables it too late.
+        jax.config.update("jax_enable_x64", True)
+        rng = np.random.default_rng(0)
+        B, N, K, M, n_folds = 4, 30, 6, 2, 5
+        X = rng.standard_normal((B, N, K))
+        Y = rng.standard_normal((B, N, M))
+        W = rng.uniform(0.1, 2.0, (B, N))
+        val = np.stack([rng.permutation(N).reshape(n_folds, -1) for _ in range(B)])
+        shared_val = val[0]
+        methods = (
+            "training_XTX",
+            "training_XTY",
+            "training_XTX_XTY",
+            "training_statistics",
+        )
+
+        for ddof in (0, 1):
+
+            def fitted(x, y, w, ddof=ddof):
+                cvm = CVMatrix(ddof=ddof, backend="jax")
+                cvm.fit(x, y, w)
+                return cvm
+
+            def all_methods(cvm, val_indices):
+                return tuple(getattr(cvm, m)(val_indices) for m in methods)
+
+            def check(result, b, val_indices, index=()):
+                expected = self.leaves(
+                    all_methods(fitted(X[b], Y[b], W[b]), val_indices)
+                )
+                actual = self.leaves(result)
+                assert len(actual) == len(expected)
+                for a, e in zip(actual, expected):
+                    if e is None:
+                        assert a is None
+                    else:
+                        assert_allclose(
+                            np.asarray(a)[index], e, rtol=1e-10, atol=1e-10
+                        )
+
+            # Per-dataset weights and validation indices, folds vmapped, under jit.
+            def per_dataset(x, y, w, vi):
+                cvm = fitted(x, y, w)
+                return jax.vmap(lambda v: all_methods(cvm, v))(vi)
+
+            result = jax.jit(jax.vmap(per_dataset))(X, Y, W, val)
+            for b, f in product(range(B), range(n_folds)):
+                check(result, b, val[b, f], (b, f))
+
+            # Per-dataset weights; shared concrete indices closed over.
+            def shared_indices(x, y, w):
+                cvm = fitted(x, y, w)
+                return jax.vmap(lambda v: all_methods(cvm, v))(jnp.asarray(shared_val))
+
+            result = jax.jit(jax.vmap(shared_indices))(X, Y, W)
+            for b, f in product(range(B), range(n_folds)):
+                check(result, b, shared_val[f], (b, f))
+
+            # Per-fold calls with concrete indices inside a vmap over the weights.
+            def per_fold(x, y, w):
+                cvm = fitted(x, y, w)
+                return tuple(all_methods(cvm, v) for v in shared_val)
+
+            result = jax.vmap(per_fold)(X, Y, W)
+            for b, f in product(range(B), range(n_folds)):
+                check(result[f], b, shared_val[f], (b,))
+
+            # Concrete weights closed over inside jax.jit, with concrete indices.
+            def closed_over(x, y):
+                cvm = fitted(x, y, W[0])
+                return tuple(all_methods(cvm, v) for v in shared_val)
+
+            result = jax.jit(closed_over)(X[0], Y[0])
+            for f in range(n_folds):
+                check(result[f], 0, shared_val[f])
+
+    def test_jax_trace_time_checks_do_not_scale_with_folds(self, monkeypatch):
+        """
+        Tests that checking concrete weights inside jax.jit counts the whole weight
+        vector a fixed number of times per trace, not once per fold, so that the
+        trace-time checks of F folds cost O(F * N_val) rather than O(F * N).
+        """
+        if getattr(self, "backend", "numpy") != "jax":
+            pytest.skip("JAX-specific trace test; runs under the jax parametrization.")
+        pytest.importorskip("jax")
+        import jax
+        import jax.numpy as jnp
+
+        jax.config.update("jax_enable_x64", True)
+        rng = np.random.default_rng(0)
+        N = 50
+        X, Y = rng.standard_normal((N, 3)), rng.standard_normal((N, 1))
+        weights = rng.uniform(0.1, 2.0, N)
+        full_counts = []
+        count_nonzero = jnp.count_nonzero
+
+        def counting(a, *args, **kwargs):
+            if not isinstance(a, jax.core.Tracer) and np.size(a) == N:
+                full_counts.append(1)
+            return count_nonzero(a, *args, **kwargs)
+
+        monkeypatch.setattr(jnp, "count_nonzero", counting)
+        counts = []
+        for n_folds in (2, 10):
+            folds = [np.arange(2 * i, 2 * i + 2) for i in range(n_folds)]
+
+            def f(x, y, folds=folds):
+                cvm = CVMatrix(ddof=1, backend="jax")
+                cvm.fit(x, y, weights)
+                return [cvm.training_statistics(v)[0] for v in folds]
+
+            full_counts.clear()
+            jax.jit(f).lower(X, Y)
+            counts.append(len(full_counts))
+        assert counts[0] == counts[1]
+
+    def test_jax_traced_weights_validation(self):
+        """
+        Tests which weight checks run when CVMatrix is traced by jax.jit/jax.vmap.
+        Concrete weights and validation indices are checked as in eager execution, also
+        inside jax.jit: negative weights closed over, and degenerate folds both with
+        weights closed over and with a model fitted eagerly. Only traced values are not
+        checked (the caller validates them before tracing): negative or degenerate
+        traced weights, also when given as a list of traced scalars.
+        """
+        if getattr(self, "backend", "numpy") != "jax":
+            pytest.skip("JAX-specific trace test; runs under the jax parametrization.")
+        pytest.importorskip("jax")
+        import jax
+
+        # As for users, JAX's 64-bit mode must be on before tracing starts, because
+        # jax.jit fixes the input dtypes then; a CVMatrix constructed inside the traced
+        # function enables it too late.
+        jax.config.update("jax_enable_x64", True)
+        rng = np.random.default_rng(0)
+        B, N, K, M = 3, 12, 4, 2
+        X = rng.standard_normal((B, N, K))
+        Y = rng.standard_normal((B, N, M))
+        W = rng.uniform(0.1, 2.0, (B, N))
+        val_indices = np.arange(4)
+
+        def fit_and_train(x, y, w):
+            cvm = CVMatrix(ddof=1, backend="jax")
+            cvm.fit(x, y, w)
+            return cvm.training_XTX_XTY(val_indices)
+
+        negative = W[0].copy()
+        negative[5] = -1.0
+        with pytest.raises(ValueError, match="Weights must be non-negative."):
+            jax.jit(lambda x, y: fit_and_train(x, y, negative))(X[0], Y[0])
+        (XTWX, _), _ = jax.vmap(fit_and_train)(X, Y, -W)  # Traced: not checked.
+        assert XTWX.shape == (B, K, K)
+        (XTWX, _), _ = jax.jit(
+            lambda x, s: fit_and_train(x, Y[0], [s] * N)  # A list of traced scalars.
+        )(X[0], 1.0)
+        assert XTWX.shape == (K, K)
+        with pytest.raises(ValueError, match=r"`weights` must have shape \(N,\)"):
+            jax.jit(lambda x, s: fit_and_train(x, Y[0], [s] * (N - 1)))(X[0], 1.0)
+
+        # No non-zero training weights, and fewer than ddof + 1 of them.
+        no_train = np.zeros(N)
+        no_train[val_indices] = 1.0
+        one_train = no_train.copy()
+        one_train[N - 1] = 1.0
+        for weights, match in (
+            (no_train, "greater than zero"),
+            (one_train, "greater than `ddof`"),
+        ):
+            with pytest.raises(ValueError, match=match):
+                fit_and_train(X[0], Y[0], weights)
+            with pytest.raises(ValueError, match=match):
+                jax.jit(lambda x, y, weights=weights: fit_and_train(x, y, weights))(
+                    X[0], Y[0]
+                )
+            fitted = CVMatrix(ddof=1, backend="jax")
+            fitted.fit(X[0], Y[0], weights)
+            with pytest.raises(ValueError, match=match):
+                jax.jit(lambda fitted=fitted: fitted.training_XTX_XTY(val_indices))()
+            batch = np.broadcast_to(weights, (B, N))
+            (XTWX, _), _ = jax.vmap(fit_and_train)(X, Y, batch)  # Traced: deferred.
+            assert XTWX.shape == (B, K, K)
+
+    def test_empty_training_set(self):
+        """
+        Tests that a fold whose training set is empty raises a ValueError when the
+        training statistics are needed, both unweighted and weighted, instead of
+        silently giving NaN means in the unweighted case. This includes validation
+        indices with duplicates, which make the training count negative.
+        """
+        X = self.load_X()[:20, :5]
+        Y = self.load_Y(["Protein", "Moisture"])[:20]
+        all_indices = np.arange(X.shape[0])
+        for weights in (None, self.load_weights(random=True)[:20]):
+            fast = CVMatrix(
+                center_X=True, center_Y=True, scale_X=False, scale_Y=False,
+                ddof=0, backend=self.backend,
+            )
+            fast.fit(X, Y, weights)
+            for method in ("training_statistics", "training_XTX", "training_XTX_XTY"):
+                for val_indices in (all_indices, np.repeat(all_indices, 2)):
+                    with pytest.raises(ValueError, match="greater than zero"):
+                        getattr(fast, method)(val_indices)
+
+    def test_failed_fit_leaves_instance_unchanged(self):
+        """
+        Tests that a fit that raises, on negative weights or on inconsistent shapes,
+        leaves a previously fitted instance unchanged, instead of mixing the new X, Y,
+        and weights with the previous matrix products and statistics.
+        """
+        X = self.load_X()[:, :5]
+        Y = self.load_Y(["Protein", "Moisture"])
+        weights = self.load_weights(random=True)
+        val_indices = np.arange(0, X.shape[0], 7)
+        fast = CVMatrix(backend=self.backend)
+        fast.fit(X, Y, weights)
+        state = dict(vars(fast))
+        (XTWX, XTWY), stats = fast.training_XTX_XTY(val_indices)
+        negative = weights.copy()
+        negative[0] = -1.0
+        for args, match in (
+            ((2 * X, 2 * Y, negative), "Weights must be non-negative."),
+            ((X[:-1], Y[:-1], weights), r"`weights` must have shape \(N,\)"),
+            ((X, Y[:-1], weights), "`Y` has"),
+            ((X, Y, np.stack([weights, weights], axis=1)), "`weights` must have"),
+            ((X[None], Y, weights), "`X` must be 1-D or 2-D"),
+            ((X, Y, 2.0), "`weights` must have"),  # Scalar weights.
+            ((X, Y[None], weights), "`Y` must be 1-D or 2-D"),
+        ):
+            with pytest.raises(ValueError, match=match):
+                fast.fit(*args)
+            assert vars(fast).keys() == state.keys()
+            assert all(vars(fast)[k] is v for k, v in state.items())
+        (XTWX_after, XTWY_after), stats_after = fast.training_XTX_XTY(val_indices)
+        assert_allclose(XTWX_after, XTWX)
+        assert_allclose(XTWY_after, XTWY)
+        self.check_equivalent_stats(stats, stats_after)
+
+    def test_validate_folds(self):
+        """
+        Tests `validate_folds`, the host-side pre-flight check for folds and weights
+        that will be traced. It needs no fit, accepts valid folds in every supported
+        form, agrees fold by fold with the eager checks of the training methods, and
+        reports every failing fold, including out-of-range validation indices, in one
+        ValueError.
+        """
+        rng = np.random.default_rng(0)
+        N = 12
+        X, Y = rng.random((N, 4)), rng.random((N, 2))
+        weights = rng.uniform(0.1, 2.0, N)
+        weights[:5] = 0.0  # Only rows 5 to 11 have non-zero weights.
+        unfitted = CVMatrix(ddof=1, backend=self.backend)
+        p = Partitioner(np.arange(N) % 3)
+        for folds in (
+            p,
+            p.folds_dict,
+            list(p.folds_dict.values()),
+            np.stack(list(p.folds_dict.values())),
+        ):
+            unfitted.validate_folds(folds, N, weights)
+            unfitted.validate_folds(folds, N)
+
+        # Fold by fold, validate_folds raises exactly when eager execution does.
+        fitted = CVMatrix(ddof=1, backend=self.backend)
+        fitted.fit(X, Y, weights)
+        for val_indices, match in (
+            (np.arange(5, N), "greater than zero"),  # No non-zero training weights.
+            (np.arange(6, N), "greater than `ddof`"),  # Only 1 (row 5).
+            (np.arange(7, N), None),  # 2 (rows 5 and 6).
+            (np.array([0, 1]), None),
+        ):
+            if match is None:
+                fitted.training_statistics(val_indices)
+                unfitted.validate_folds([val_indices], N, weights)
+                continue
+            with pytest.raises(ValueError, match=match):
+                fitted.training_statistics(val_indices)
+            with pytest.raises(ValueError, match=match):
+                unfitted.validate_folds([val_indices], N, weights)
+
+        # Duplicate validation indices: eager execution only catches them when they
+        # drive the training count below one (here -7); validate_folds always does.
+        many = np.repeat(np.arange(5, N), 2)
+        with pytest.raises(ValueError, match="greater than zero"):
+            fitted.training_statistics(many)
+        few = np.array([5, 5, 6])  # The count stays at 3, so eager does not raise.
+        fitted.training_statistics(few)
+        for duplicated in (many, few):
+            with pytest.raises(ValueError, match="Fold 0: the validation indices"):
+                unfitted.validate_folds([duplicated], N, weights)
+
+        # Every failing fold is reported, with weights and without.
+        folds = {
+            "zero": np.arange(5, N),
+            "ddof": np.arange(6, N),
+            "range": np.array([3, N]),
+            "ok": np.array([0, 1]),
+        }
+        with pytest.raises(ValueError) as excinfo:
+            unfitted.validate_folds(folds, N, weights)
+        message = str(excinfo.value)
+        assert "Fold 'zero'" in message and "Fold 'ddof'" in message
+        assert "Fold 'range'" in message and "Fold 'ok'" not in message
+        with pytest.raises(ValueError) as excinfo:
+            unfitted.validate_folds([np.arange(N), np.arange(N - 1), np.arange(2)], N)
+        message = str(excinfo.value)
+        assert "Fold 0:" in message and "greater than zero" in message
+        assert "Fold 1:" in message and "greater than `ddof`" in message
+        assert "Fold 2:" not in message
+
+        # Partitioner's NumPy integer folds are named plainly in the message.
+        only_fold_1 = np.zeros(N)
+        only_fold_1[p.folds_dict[1]] = 1.0  # Fold 1's training set has no weights.
+        with pytest.raises(ValueError) as excinfo:
+            unfitted.validate_folds(p, N, only_fold_1)
+        message = str(excinfo.value)
+        assert "Fold 1: The number of non-zero weights" in message
+        assert "Fold 0:" not in message and "np." not in message
+
+        # Each fold must be a 1-D array of validation indices; a 1-D array as `folds`
+        # (one fold, or per-sample fold labels meant for Partitioner) is rejected.
+        with pytest.raises(ValueError, match="`folds` is a 1-D array"):
+            unfitted.validate_folds(np.arange(N) % 3, N, weights)
+        with pytest.raises(ValueError, match="Fold 1: the validation indices must be"):
+            unfitted.validate_folds([np.array([0, 1]), np.array([[2, 3]])], N)
+
+        # Without centering and scaling, only the index range is checked.
+        plain = CVMatrix(
+            center_X=False, center_Y=False, scale_X=False, scale_Y=False,
+            backend=self.backend,
+        )
+        plain.validate_folds([np.arange(N)], N, weights)
+        with pytest.raises(ValueError, match="Fold 0: the validation indices"):
+            plain.validate_folds([np.array([-1])], N)
+
+        # Validation indices must be integers; an empty fold is fine.
+        mask = np.zeros(N, dtype=bool)
+        mask[:2] = True
+        for val_indices in (np.array([0.0, 1.0]), mask):
+            with pytest.raises(ValueError, match="Fold 0: .* must be integers"):
+                unfitted.validate_folds([val_indices], N, weights)
+        unfitted.validate_folds([[]], N, weights)
+        unfitted.validate_folds([[]], N)
+
+        # Weights follow the shape rule of `fit` and are checked after the cast to
+        # `dtype`, like in `fit`.
+        for bad in (weights[:-1], weights[None], 2.0):
+            with pytest.raises(ValueError, match=r"`weights` must have shape \(N,\)"):
+                unfitted.validate_folds(p, N, bad)
+            with pytest.raises(ValueError, match=r"`weights` must have shape \(N,\)"):
+                fitted.fit(X, Y, bad)
+        unfitted.validate_folds(p, N, weights[:, None])
+        negative = weights.copy()
+        negative[6] = -1.0
+        with pytest.raises(ValueError, match="Weights must be non-negative."):
+            unfitted.validate_folds(p, N, negative)
+        tiny = weights.copy()
+        tiny[6] = -1e-60  # -0.0 as float32.
+        CVMatrix(ddof=1, dtype=np.float32, backend=self.backend).validate_folds(
+            p, N, tiny
+        )
+
+    def test_weights_validated_after_cast(self):
+        """
+        Tests that the weights are checked for negative values after they are cast to
+        `dtype`, so that both backends, and jax.jit with concrete weights closed over,
+        agree: -1e-60 becomes -0.0 as float32, which is accepted, but stays negative
+        as float64, which is rejected.
+        """
+        X = self.load_X()[:, :5]
+        Y = self.load_Y(["Protein", "Moisture"])
+        weights = self.load_weights(random=True)
+        weights[0] = -1e-60
+
+        def fit(x, y, dtype):
+            cvm = CVMatrix(dtype=dtype, backend=self.backend)
+            cvm.fit(x, y, weights)
+            return cvm.weights
+
+        assert float(fit(X, Y, np.float32)[0, 0]) == 0.0
+        with pytest.raises(ValueError, match="Weights must be non-negative."):
+            fit(X, Y, np.float64)
+        if self.backend == "jax":
+            import jax
+
+            jax.jit(lambda x, y: fit(x, y, np.float32))(X, Y)
+            with pytest.raises(ValueError, match="Weights must be non-negative."):
+                jax.jit(lambda x, y: fit(x, y, np.float64))(X, Y)
 
     def test_compute_matrix_products(self):
         """
@@ -693,11 +1119,6 @@ class TestClass:
         not computed raise a ValueError, and that the remaining methods give the same
         results as when both products are computed.
         """
-
-        def leaves(result):
-            if isinstance(result, tuple):
-                return [leaf for r in result for leaf in leaves(r)]
-            return [result]
 
         X = self.load_X()[:, :5]
         Y = self.load_Y(["Protein", "Moisture"])
@@ -725,8 +1146,8 @@ class TestClass:
                     with pytest.raises(ValueError, match="was not computed by `fit`"):
                         getattr(fast, method)(val_indices)
                     continue
-                actual = leaves(getattr(fast, method)(val_indices))
-                desired = leaves(getattr(reference, method)(val_indices))
+                actual = self.leaves(getattr(fast, method)(val_indices))
+                desired = self.leaves(getattr(reference, method)(val_indices))
                 assert len(actual) == len(desired)
                 for a, d in zip(actual, desired):
                     if d is None:
